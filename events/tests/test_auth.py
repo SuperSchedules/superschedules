@@ -1,22 +1,12 @@
 import os
 import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
-
 import django
-
-django.setup()
-
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from model_bakery import baker
 from django.test import TestCase
-from django.test.utils import setup_test_environment
 from django.core.management import call_command
 
-setup_test_environment()
-call_command('migrate', verbosity=0)
 
 
 class AuthTests(TestCase):
