@@ -1,5 +1,5 @@
 from django.db import models
-from pgvector.models import VectorField
+from pgvector.django import VectorField
 from django.contrib.postgres.indexes import GinIndex
 
 class Source(models.Model):
