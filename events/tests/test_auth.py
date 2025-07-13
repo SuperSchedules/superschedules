@@ -1,11 +1,7 @@
-import os
-import sys
-import django
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from model_bakery import baker
 from django.test import TestCase
-from django.core.management import call_command
 
 
 

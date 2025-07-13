@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 from ics import Calendar
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin, urlparse
 
 
 def find_calendar_urls(query, max_results=5):
@@ -47,11 +47,61 @@ def fetch_ics_events(url):
     return parse_ics(resp.text)
 
 
+def find_calendar_urls_in_domain(domain, max_pages=10, max_results=5):
+    """Crawl a domain looking for links to ICS calendars."""
+    visited = set()
+    to_visit = [f"https://{domain}"]
+    urls = []
+
+    while to_visit and len(visited) < max_pages and len(urls) < max_results:
+        current = to_visit.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        try:
+            resp = requests.get(current, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+            resp.raise_for_status()
+        except requests.RequestException:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            parsed = urlparse(href)
+            if not parsed.netloc:
+                absolute = urljoin(current, href)
+            else:
+                absolute = href
+
+            if absolute.lower().endswith(".ics"):
+                if absolute not in urls:
+                    urls.append(absolute)
+                    if len(urls) >= max_results:
+                        break
+            else:
+                parsed_abs = urlparse(absolute)
+                if parsed_abs.netloc.endswith(domain):
+                    if absolute not in visited and absolute not in to_visit:
+                        to_visit.append(absolute)
+
+    return urls
+
+
 
 def scrape_events_for_query(query):
     """Find calendar URLs for the query and return parsed events."""
     events = []
     for url in find_calendar_urls(query):
+        try:
+            events.extend(fetch_ics_events(url))
+        except requests.RequestException:
+            continue
+    return events
+
+
+def scrape_events_for_domain(domain):
+    """Find calendars within a domain and return parsed events."""
+    events = []
+    for url in find_calendar_urls_in_domain(domain):
         try:
             events.extend(fetch_ics_events(url))
         except requests.RequestException:

@@ -1,7 +1,8 @@
 from django.contrib import admin, messages
 from django.utils import timezone
+import re
 from .models import Source, Event
-from .scraper import scrape_events_for_query
+from .scraper import scrape_events_for_query, scrape_events_for_domain
 
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
@@ -11,7 +12,10 @@ class SourceAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         if obj.search_query:
-            events = scrape_events_for_query(obj.search_query)
+            if re.match(r'^[\w.-]+\.[a-zA-Z]{2,}$', obj.search_query):
+                events = scrape_events_for_domain(obj.search_query)
+            else:
+                events = scrape_events_for_query(obj.search_query)
             imported = 0
             for ev in events:
                 _, created = Event.objects.get_or_create(

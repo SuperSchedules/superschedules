@@ -2,7 +2,12 @@ from django.test import SimpleTestCase, TestCase
 from django_dynamic_fixture import G
 import re
 import responses
-from events.scraper import find_calendar_urls, parse_ics
+from events.scraper import (
+    find_calendar_urls,
+    parse_ics,
+    find_calendar_urls_in_domain,
+    scrape_events_for_domain,
+)
 from events.models import Source, Event
 
 
@@ -37,6 +42,41 @@ END:VCALENDAR
         responses.get(pattern, body=html)
         urls = find_calendar_urls("boston college")
         self.assertEqual(urls, ["https://example.com/events.ics"])
+
+    @responses.activate
+    def test_find_calendar_urls_in_domain(self):
+        root_html = "<html><body>"
+        root_html += "<a href='/events.ics'>ics</a>"
+        root_html += "<a href='/calendar/'>cal</a>"
+        root_html += "</body></html>"
+        cal_html = "<html><body><a href='/more.ics'>more</a></body></html>"
+        responses.get("https://example.com", body=root_html)
+        responses.get("https://example.com/calendar/", body=cal_html)
+        urls = find_calendar_urls_in_domain("example.com")
+        self.assertEqual(
+            set(urls),
+            {"https://example.com/events.ics", "https://example.com/more.ics"},
+        )
+
+    @responses.activate
+    def test_scrape_events_for_domain(self):
+        ics_content = """\
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//example//Test//EN
+BEGIN:VEVENT
+UID:test2@example.com
+SUMMARY:Domain Event
+DTSTART:20240102T100000Z
+DTEND:20240102T110000Z
+END:VEVENT
+END:VCALENDAR
+"""
+        responses.get("https://example.com", body="<a href='/d.ics'>d</a>")
+        responses.get("https://example.com/d.ics", body=ics_content)
+        events = scrape_events_for_domain("example.com")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["title"], "Domain Event")
 
 
 class EventModelTests(TestCase):
