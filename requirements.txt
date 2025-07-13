@@ -6,3 +6,6 @@ beautifulsoup4
 ics
 pytest
 responses
+model-bakery
+pgvector
+psycopg2-binary
