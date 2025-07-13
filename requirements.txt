@@ -6,6 +6,5 @@ beautifulsoup4
 ics
 pytest
 responses
-pgvector
-psycopg2-binary
+model-bakery
 django-dynamic-fixture
