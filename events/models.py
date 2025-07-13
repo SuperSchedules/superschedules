@@ -4,7 +4,8 @@ from django.contrib.postgres.indexes import GinIndex
 
 class Source(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    base_url = models.URLField()
+    base_url = models.URLField(blank=True)
+    search_query = models.CharField(max_length=255, blank=True)
     last_crawl = models.DateTimeField(null=True)
 
     def __str__(self):
