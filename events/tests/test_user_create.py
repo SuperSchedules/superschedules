@@ -22,7 +22,7 @@ class UserCreationTests(TestCase):
         self.assertFalse(user.is_active)
 
         login_resp = client.post(
-            "/api/token/",
+            "/api/v1/token/",
             {"username": payload["email"], "password": payload["password"]},
             format="json",
         )
