@@ -3,7 +3,6 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
-DEBUG = True
 ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
@@ -98,7 +97,3 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
-
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
