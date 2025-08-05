@@ -19,7 +19,7 @@ class EventAPITests(TestCase):
 
     def authenticate(self):
         resp = self.client.post(
-            "/api/token/", {"username": self.user.username, "password": self.password}, format="json"
+            "/api/v1/token/", {"username": self.user.username, "password": self.password}, format="json"
         )
         self.assertEqual(resp.status_code, 200)
         token = resp.data["access"]
