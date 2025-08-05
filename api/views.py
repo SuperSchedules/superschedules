@@ -1,10 +1,27 @@
 from typing import List
 from datetime import date, datetime, time
 
-from ninja import ModelSchema, Router
+from django.contrib.auth import get_user_model
 from django.utils import timezone
+from ninja import ModelSchema, Router, Schema
+from ninja.errors import HttpError
 
 from events.models import Event
+
+User = get_user_model()
+
+
+class UserCreateSchema(Schema):
+    email: str
+    password: str
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+class UserSchema(ModelSchema):
+    class Config:
+        model = User
+        model_fields = ["id", "username", "email", "first_name", "last_name"]
 
 
 router = Router()
@@ -22,6 +39,23 @@ class EventSchema(ModelSchema):
             "end_time",
             "url",
         ]
+
+
+@router.post("/users", auth=None, response={201: UserSchema})
+def create_user(request, payload: UserCreateSchema):
+    if User.objects.filter(username=payload.email).exists():
+        raise HttpError(400, "A user with this email already exists.")
+
+    user = User.objects.create_user(
+        username=payload.email,
+        email=payload.email,
+        password=payload.password,
+        first_name=payload.first_name or "",
+        last_name=payload.last_name or "",
+        is_active=False,
+    )
+
+    return 201, user
 
 
 @router.get("/ping")
