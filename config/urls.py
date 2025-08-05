@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path
 from ninja import NinjaAPI
+from ninja_jwt.authentication import JWTAuth
 from api.views import router as api_router
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -8,7 +9,7 @@ from rest_framework_simplejwt.views import (
 )
 
 
-api = NinjaAPI(auth=None)
+api = NinjaAPI(auth=JWTAuth())
 api.add_router("/v1/", api_router)
 
 
