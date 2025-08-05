@@ -3,10 +3,7 @@ from django.urls import path
 from ninja import NinjaAPI
 from ninja_jwt.authentication import JWTAuth
 from api.views import router as api_router
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
-)
+from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 
 # Instantiate the API without default authentication so that
