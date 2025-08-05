@@ -1,15 +1,21 @@
 from django.contrib import admin
-from django.urls import path, include
-from rest_framework import routers
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from events.api import EventViewSet
+from django.urls import path
+from ninja import NinjaAPI
+from api.views import router as api_router
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+)
 
-router = routers.DefaultRouter()
-router.register(r'events', EventViewSet, basename='event')
+
+api = NinjaAPI(auth=None)
+api.add_router("/v1/", api_router)
+
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('api/', include(router.urls)),
+    path("admin/", admin.site.urls),
+    path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("api/", api.urls),
 ]
+

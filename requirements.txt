@@ -1,6 +1,8 @@
 Django==5.0.1
 djangorestframework
 djangorestframework-simplejwt
+django-ninja
+django-ninja-jwt
 requests
 beautifulsoup4
 ics
