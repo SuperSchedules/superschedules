@@ -3,10 +3,14 @@ from datetime import date, datetime, time
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.conf import settings
+from django.core import signing
+from django.core.mail import send_mail
 from ninja import ModelSchema, Router, Schema
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 from django.shortcuts import get_object_or_404
+from django.core.signing import BadSignature, SignatureExpired
 
 from events.models import Event, Source
 from api.auth import ServiceTokenAuth
@@ -28,6 +32,15 @@ class UserSchema(ModelSchema):
 
 
 router = Router()
+
+
+class PasswordResetRequestSchema(Schema):
+    email: str
+
+
+class PasswordResetConfirmSchema(Schema):
+    token: str
+    password: str
 
 
 class EventSchema(ModelSchema):
@@ -81,6 +94,39 @@ def create_user(request, payload: UserCreateSchema):
     )
 
     return 201, user
+
+
+@router.post("/reset/", auth=None)
+def request_password_reset(request, payload: PasswordResetRequestSchema):
+    user = User.objects.filter(email=payload.email).first()
+    if user:
+        token = signing.dumps({"user_id": user.id}, salt="password-reset")
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+        send_mail(
+            "Password Reset",
+            f"Click the link to reset your password: {reset_link}",
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False,
+        )
+    return {"message": "Check your email for a password reset link."}
+
+
+@router.post("/reset/confirm/", auth=None)
+def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
+    try:
+        data = signing.loads(
+            payload.token,
+            salt="password-reset",
+            max_age=settings.PASSWORD_RESET_TIMEOUT,
+        )
+        user = User.objects.get(id=data["user_id"])
+    except (BadSignature, SignatureExpired, User.DoesNotExist):
+        raise HttpError(400, "Invalid or expired token.")
+
+    user.set_password(payload.password)
+    user.save()
+    return {"message": "Password has been reset."}
 
 
 @router.get("/ping")
