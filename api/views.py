@@ -129,7 +129,7 @@ def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
     return {"message": "Password has been reset."}
 
 
-@router.get("/ping")
+@router.get("/ping", auth=JWTAuth())
 def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
 
