@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 from django.utils import timezone
 import re
-from .models import Source, Event
+from .models import Source, Event, ServiceToken
 from .scraper import scrape_events_for_query, scrape_events_for_domain
 
 @admin.register(Source)
@@ -40,3 +40,9 @@ class SourceAdmin(admin.ModelAdmin):
 class EventAdmin(admin.ModelAdmin):
     list_display = ('title', 'source', 'start_time', 'location')
     search_fields = ('title', 'description')
+
+
+@admin.register(ServiceToken)
+class ServiceTokenAdmin(admin.ModelAdmin):
+    list_display = ("name", "token", "created_at")
+    readonly_fields = ("token", "created_at")
