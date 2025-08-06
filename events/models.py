@@ -19,8 +19,8 @@ class Event(models.Model):
     location = models.CharField(max_length=255)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField(null=True, blank=True)
-    url = models.URLField()
-    embedding = VectorField(dimensions=768, null=True)
+    url = models.URLField(blank=True, null=True)
+    embedding = VectorField(dimensions=768, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
