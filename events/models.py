@@ -1,6 +1,7 @@
 from django.db import models
 from pgvector.django import VectorField
 from django.contrib.postgres.indexes import GinIndex
+import secrets
 
 class Source(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -33,3 +34,16 @@ class Event(models.Model):
 
     def __str__(self):
         return self.title
+
+
+def generate_token():
+    return secrets.token_hex(20)
+
+
+class ServiceToken(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    token = models.CharField(max_length=40, unique=True, default=generate_token)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name

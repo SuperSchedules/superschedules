@@ -5,8 +5,11 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from ninja import ModelSchema, Router, Schema
 from ninja.errors import HttpError
+from ninja_jwt.authentication import JWTAuth
+from django.shortcuts import get_object_or_404
 
-from events.models import Event
+from events.models import Event, Source
+from api.auth import ServiceTokenAuth
 
 User = get_user_model()
 
@@ -41,6 +44,28 @@ class EventSchema(ModelSchema):
         ]
 
 
+class EventCreateSchema(Schema):
+    source_id: int
+    external_id: str
+    title: str
+    description: str
+    location: str
+    start_time: datetime
+    end_time: datetime | None = None
+    url: str | None = None
+
+
+class EventUpdateSchema(Schema):
+    source_id: int | None = None
+    external_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    location: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    url: str | None = None
+
+
 @router.post("/users/", auth=None, response={201: UserSchema})
 def create_user(request, payload: UserCreateSchema):
     if User.objects.filter(username=payload.email).exists():
@@ -63,7 +88,7 @@ def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
 
 
-@router.get("/events/", response=List[EventSchema])
+@router.get("/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema])
 def list_events(request, start: date | None = None, end: date | None = None):
     qs = Event.objects.all().order_by("start_time")
 
@@ -81,4 +106,44 @@ def list_events(request, start: date | None = None, end: date | None = None):
         qs = qs.filter(start_time__gte=timezone.now())
 
     return qs
+
+
+@router.get("/events/{event_id}", auth=[JWTAuth(), ServiceTokenAuth()], response=EventSchema)
+def get_event(request, event_id: int):
+    return get_object_or_404(Event, id=event_id)
+
+
+@router.post("/events/", auth=ServiceTokenAuth(), response={201: EventSchema})
+def create_event(request, payload: EventCreateSchema):
+    source = get_object_or_404(Source, id=payload.source_id)
+    event = Event.objects.create(
+        source=source,
+        external_id=payload.external_id,
+        title=payload.title,
+        description=payload.description,
+        location=payload.location,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        url=payload.url,
+    )
+    return 201, event
+
+
+@router.put("/events/{event_id}", auth=ServiceTokenAuth(), response=EventSchema)
+def update_event(request, event_id: int, payload: EventUpdateSchema):
+    event = get_object_or_404(Event, id=event_id)
+    data = payload.dict(exclude_unset=True)
+    if "source_id" in data:
+        event.source = get_object_or_404(Source, id=data.pop("source_id"))
+    for attr, value in data.items():
+        setattr(event, attr, value)
+    event.save()
+    return event
+
+
+@router.delete("/events/{event_id}", auth=ServiceTokenAuth(), response={204: None})
+def delete_event(request, event_id: int):
+    event = get_object_or_404(Event, id=event_id)
+    event.delete()
+    return 204, None
 

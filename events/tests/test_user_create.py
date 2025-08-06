@@ -12,7 +12,7 @@ class UserCreationTests(TestCase):
             "first_name": "New",
             "last_name": "User",
         }
-        resp = client.post("/api/v1/users", payload, format="json")
+        resp = client.post("/api/v1/users/", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         data = resp.json()
         self.assertEqual(data["email"], payload["email"])
