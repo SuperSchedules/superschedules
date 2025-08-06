@@ -2,6 +2,7 @@ from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.core import mail
 from rest_framework.test import APIClient
+from unittest.mock import patch
 
 
 @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
@@ -28,3 +29,10 @@ class PasswordResetTests(TestCase):
         self.assertEqual(resp.json()['message'], 'Password has been reset.')
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password(new_pass))
+
+    def test_password_reset_email_failure_is_silent(self):
+        """Ensure the reset endpoint still responds even if email sending fails."""
+        with patch('api.views.send_mail', side_effect=Exception("SMTP error")):
+            resp = self.client.post('/api/v1/reset/', {'email': self.user.email}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['message'], 'Check your email for a password reset link.')

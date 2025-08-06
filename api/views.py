@@ -102,13 +102,20 @@ def request_password_reset(request, payload: PasswordResetRequestSchema):
     if user:
         token = signing.dumps({"user_id": user.id}, salt="password-reset")
         reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-        send_mail(
-            "Password Reset",
-            f"Click the link to reset your password: {reset_link}",
-            settings.DEFAULT_FROM_EMAIL,
-            [user.email],
-            fail_silently=False,
-        )
+        # Fail silently to avoid exposing mail server misconfiguration to the user
+        # during the password reset request. Even if the email cannot be sent we
+        # still return a generic success response for security reasons.
+        try:
+            send_mail(
+                "Password Reset",
+                f"Click the link to reset your password: {reset_link}",
+                settings.DEFAULT_FROM_EMAIL,
+                [user.email],
+                fail_silently=True,
+            )
+        except Exception:
+            # Intentionally ignore any e-mail errors
+            pass
     return {"message": "Check your email for a password reset link."}
 
 
