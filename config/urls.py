@@ -1,16 +1,16 @@
 from django.contrib import admin
 from django.urls import path, include
 from ninja import NinjaAPI
-from ninja_jwt.authentication import JWTAuth
 from api.views import router as api_router
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 
-# Instantiate the API without default authentication so that
-# non-authenticated endpoints can be explicitly declared.
+# Instantiate the API without a global authentication requirement.
+# Individual routes will specify authentication as needed, allowing
+# certain endpoints such as password reset to be accessed without
+# credentials.
 api = NinjaAPI()
-# Apply JWT authentication to all routes under the "/v1" prefix.
-api.add_router("/v1/", api_router, auth=JWTAuth())
+api.add_router("/v1/", api_router)
 
 
 urlpatterns = [
