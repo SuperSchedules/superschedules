@@ -9,8 +9,11 @@ from rest_framework_simplejwt.views import (
 )
 
 
-api = NinjaAPI(auth=JWTAuth())
-api.add_router("/v1/", api_router)
+# Instantiate the API without default authentication so that
+# non-authenticated endpoints can be explicitly declared.
+api = NinjaAPI()
+# Apply JWT authentication to all routes under the "/v1" prefix.
+api.add_router("/v1/", api_router, auth=JWTAuth())
 
 
 urlpatterns = [
