@@ -41,7 +41,7 @@ class EventSchema(ModelSchema):
         ]
 
 
-@router.post("/users", auth=None, response={201: UserSchema})
+@router.post("/users/", auth=None, response={201: UserSchema})
 def create_user(request, payload: UserCreateSchema):
     if User.objects.filter(username=payload.email).exists():
         raise HttpError(400, "A user with this email already exists.")
@@ -63,7 +63,7 @@ def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
 
 
-@router.get("/events", response=List[EventSchema])
+@router.get("/events/", response=List[EventSchema])
 def list_events(request, start: date | None = None, end: date | None = None):
     qs = Event.objects.all().order_by("start_time")
 
