@@ -31,7 +31,7 @@ class EventAPITests(TestCase):
 
     def test_event_date_filtering(self):
         self.authenticate()
-        source = baker.make(Source)
+        source = baker.make(Source, user=self.user)
         now = timezone.now()
         past_event = baker.make(Event, source=source, start_time=now - timedelta(days=1))
         future_event = baker.make(Event, source=source, start_time=now + timedelta(days=1))
@@ -70,7 +70,7 @@ class EventCRUDTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         jwt = resp.data["access"]
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {jwt}")
-        source = baker.make(Source)
+        source = baker.make(Source, user=baker.make(get_user_model()))
         payload = {
             "source_id": source.id,
             "external_id": "ext1",
@@ -84,7 +84,7 @@ class EventCRUDTests(TestCase):
 
     def test_service_token_full_crud(self):
         self.auth_service()
-        source = baker.make(Source)
+        source = baker.make(Source, user=baker.make(get_user_model()))
         payload = {
             "source_id": source.id,
             "external_id": "ext1",
