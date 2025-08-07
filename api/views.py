@@ -79,6 +79,18 @@ class EventUpdateSchema(Schema):
     url: str | None = None
 
 
+class SourceSchema(ModelSchema):
+    class Config:
+        model = Source
+        model_fields = ["id", "name", "base_url", "search_method", "status"]
+
+
+class SourceCreateSchema(Schema):
+    base_url: str
+    name: str | None = None
+    search_method: str | None = None
+
+
 @router.post("/users/", auth=None, response={201: UserSchema})
 def create_user(request, payload: UserCreateSchema):
     if User.objects.filter(username=payload.email).exists():
@@ -139,6 +151,30 @@ def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
 @router.get("/ping", auth=JWTAuth())
 def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
+
+
+@router.get("/sources/", auth=JWTAuth(), response=List[SourceSchema])
+def list_sources(request):
+    return Source.objects.filter(user=request.user)
+
+
+@router.post("/sources/", auth=JWTAuth(), response={201: SourceSchema})
+def create_source(request, payload: SourceCreateSchema):
+    source = Source.objects.create(
+        user=request.user,
+        name=payload.name,
+        base_url=payload.base_url,
+        search_method=payload.search_method
+        or Source.SearchMethod.MANUAL,
+        status=Source.Status.SUBMITTED,
+    )
+    try:
+        from superschedules_collector import collect_source
+
+        collect_source(source.id)
+    except Exception:
+        pass
+    return 201, source
 
 
 @router.get("/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema])
