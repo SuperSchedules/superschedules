@@ -82,7 +82,15 @@ class EventUpdateSchema(Schema):
 class SourceSchema(ModelSchema):
     class Config:
         model = Source
-        model_fields = ["id", "name", "base_url", "search_method", "status"]
+        model_fields = [
+            "id",
+            "name",
+            "base_url",
+            "search_method",
+            "status",
+            "date_added",
+            "last_run_at",
+        ]
 
 
 class SourceCreateSchema(Schema):
@@ -166,7 +174,7 @@ def create_source(request, payload: SourceCreateSchema):
         base_url=payload.base_url,
         search_method=payload.search_method
         or Source.SearchMethod.MANUAL,
-        status=Source.Status.SUBMITTED,
+        status=Source.Status.NOT_RUN,
     )
     try:
         from superschedules_collector import collect_source

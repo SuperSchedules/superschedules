@@ -38,9 +38,16 @@ class SourceAPITests(TestCase):
         data = resp.json()
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["name"], "Mine")
+        self.assertIn("date_added", data[0])
+        self.assertIn("last_run_at", data[0])
 
         payload = {"base_url": "https://new.com", "name": "New Source"}
         resp = self.client.post("/api/v1/sources/", payload, format="json")
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()["status"], "submitted")
-        self.assertTrue(Source.objects.filter(base_url="https://new.com", user=self.user).exists())
+        self.assertEqual(resp.json()["status"], "not_run")
+        self.assertIn("date_added", resp.json())
+        self.assertIn("last_run_at", resp.json())
+        self.assertIsNone(resp.json()["last_run_at"])
+        self.assertTrue(
+            Source.objects.filter(base_url="https://new.com", user=self.user).exists()
+        )

@@ -6,9 +6,9 @@ import secrets
 
 class Source(models.Model):
     class Status(models.TextChoices):
-        SUBMITTED = "submitted", "Submitted"
+        NOT_RUN = "not_run", "Not run"
         IN_PROGRESS = "in_progress", "In Progress"
-        COMPLETED = "completed", "Completed"
+        PROCESSED = "processed", "Processed"
 
     class SearchMethod(models.TextChoices):
         MANUAL = "manual", "Manual scrape"
@@ -30,7 +30,7 @@ class Source(models.Model):
         default=SearchMethod.MANUAL,
     )
     status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.SUBMITTED
+        max_length=20, choices=Status.choices, default=Status.NOT_RUN
     )
     event = models.ForeignKey(
         "Event",
@@ -39,7 +39,8 @@ class Source(models.Model):
         blank=True,
         related_name="source_submissions",
     )
-    last_crawl = models.DateTimeField(null=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    date_added = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name or self.base_url
