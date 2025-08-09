@@ -1,5 +1,6 @@
 from typing import List
 from datetime import date, datetime, time
+from urllib.parse import urlparse
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -58,7 +59,7 @@ class EventSchema(ModelSchema):
 
 
 class EventCreateSchema(Schema):
-    source_id: int
+    source_id: int | None = None
     external_id: str
     title: str
     description: str
@@ -172,8 +173,7 @@ def create_source(request, payload: SourceCreateSchema):
         user=request.user,
         name=payload.name,
         base_url=payload.base_url,
-        search_method=payload.search_method
-        or Source.SearchMethod.MANUAL,
+        search_method=payload.search_method or Source.SearchMethod.MANUAL,
         status=Source.Status.NOT_RUN,
     )
     try:
@@ -185,7 +185,9 @@ def create_source(request, payload: SourceCreateSchema):
     return 201, source
 
 
-@router.get("/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema])
+@router.get(
+    "/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema]
+)
 def list_events(request, start: date | None = None, end: date | None = None):
     qs = Event.objects.all().order_by("start_time")
 
@@ -205,14 +207,24 @@ def list_events(request, start: date | None = None, end: date | None = None):
     return qs
 
 
-@router.get("/events/{event_id}", auth=[JWTAuth(), ServiceTokenAuth()], response=EventSchema)
+@router.get(
+    "/events/{event_id}", auth=[JWTAuth(), ServiceTokenAuth()], response=EventSchema
+)
 def get_event(request, event_id: int):
     return get_object_or_404(Event, id=event_id)
 
 
 @router.post("/events/", auth=ServiceTokenAuth(), response={201: EventSchema})
 def create_event(request, payload: EventCreateSchema):
-    source = get_object_or_404(Source, id=payload.source_id)
+    if payload.source_id is not None:
+        source = get_object_or_404(Source, id=payload.source_id)
+    else:
+        if not payload.url:
+            raise HttpError(400, "Either source_id or url must be provided.")
+        parsed = urlparse(payload.url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        source, _ = Source.objects.get_or_create(base_url=base_url)
+
     event = Event.objects.create(
         source=source,
         external_id=payload.external_id,
@@ -243,4 +255,3 @@ def delete_event(request, event_id: int):
     event = get_object_or_404(Event, id=event_id)
     event.delete()
     return 204, None
-

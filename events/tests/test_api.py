@@ -19,7 +19,9 @@ class EventAPITests(TestCase):
 
     def authenticate(self):
         resp = self.client.post(
-            "/api/v1/token/", {"username": self.user.username, "password": self.password}, format="json"
+            "/api/v1/token/",
+            {"username": self.user.username, "password": self.password},
+            format="json",
         )
         self.assertEqual(resp.status_code, 200)
         token = resp.data["access"]
@@ -33,8 +35,12 @@ class EventAPITests(TestCase):
         self.authenticate()
         source = baker.make(Source, user=self.user)
         now = timezone.now()
-        past_event = baker.make(Event, source=source, start_time=now - timedelta(days=1))
-        future_event = baker.make(Event, source=source, start_time=now + timedelta(days=1))
+        past_event = baker.make(
+            Event, source=source, start_time=now - timedelta(days=1)
+        )
+        future_event = baker.make(
+            Event, source=source, start_time=now + timedelta(days=1)
+        )
 
         resp = self.client.get("/api/v1/events/")
         ids = [ev["id"] for ev in resp.json()]
@@ -65,7 +71,9 @@ class EventCRUDTests(TestCase):
         user.save()
         client = APIClient()
         resp = client.post(
-            "/api/v1/token/", {"username": user.username, "password": password}, format="json"
+            "/api/v1/token/",
+            {"username": user.username, "password": password},
+            format="json",
         )
         self.assertEqual(resp.status_code, 200)
         jwt = resp.data["access"]
@@ -126,3 +134,25 @@ class EventCRUDTests(TestCase):
         resp = self.client.delete(f"/api/v1/events/{event_id}")
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(Event.objects.filter(id=event_id).exists())
+
+    def test_create_event_without_source_uses_url(self):
+        self.auth_service()
+        payload = {
+            "external_id": "ext1",
+            "title": "Ev",
+            "description": "Desc",
+            "location": "Loc",
+            "start_time": timezone.now().isoformat(),
+            "url": "https://example.com/event/1",
+        }
+        resp = self.client.post("/api/v1/events/", payload, format="json")
+        self.assertEqual(resp.status_code, 201)
+        source = Source.objects.get(base_url="https://example.com")
+        self.assertEqual(Event.objects.get(id=resp.json()["id"]).source, source)
+
+        payload["external_id"] = "ext2"
+        resp = self.client.post("/api/v1/events/", payload, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(
+            Source.objects.filter(base_url="https://example.com").count(), 1
+        )
