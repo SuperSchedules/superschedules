@@ -82,6 +82,26 @@ class EventCRUDTests(TestCase):
         resp = client.post("/api/v1/events/", payload, format="json")
         self.assertEqual(resp.status_code, 401)
 
+    def test_invalid_service_token_cannot_create_event(self):
+        source = baker.make(Source, user=baker.make(get_user_model()))
+        payload = {
+            "source_id": source.id,
+            "external_id": "ext1",
+            "title": "Ev",
+            "description": "Desc",
+            "location": "Loc",
+            "start_time": timezone.now().isoformat(),
+        }
+
+        # Missing token
+        resp = self.client.post("/api/v1/events/", payload, format="json")
+        self.assertEqual(resp.status_code, 401)
+
+        # Invalid token
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer wrongtoken")
+        resp = self.client.post("/api/v1/events/", payload, format="json")
+        self.assertEqual(resp.status_code, 401)
+
     def test_service_token_full_crud(self):
         self.auth_service()
         source = baker.make(Source, user=baker.make(get_user_model()))
