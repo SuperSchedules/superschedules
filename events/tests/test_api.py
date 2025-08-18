@@ -120,16 +120,22 @@ class EventCRUDTests(TestCase):
             "description": "Desc",
             "location": "Loc",
             "start_time": timezone.now().isoformat(),
+            "metadata_tags": ["tag1", "tag2"],
         }
         resp = self.client.post("/api/v1/events/", payload, format="json")
         self.assertEqual(resp.status_code, 201)
-        event_id = resp.json()["id"]
+        data = resp.json()
+        event_id = data["id"]
+        self.assertEqual(data["metadata_tags"], ["tag1", "tag2"])
 
         resp = self.client.put(
-            f"/api/v1/events/{event_id}", {"title": "New"}, format="json"
+            f"/api/v1/events/{event_id}",
+            {"title": "New", "metadata_tags": ["tag3"]},
+            format="json",
         )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["title"], "New")
+        self.assertEqual(resp.json()["metadata_tags"], ["tag3"])
 
         resp = self.client.delete(f"/api/v1/events/{event_id}")
         self.assertEqual(resp.status_code, 204)
@@ -144,6 +150,7 @@ class EventCRUDTests(TestCase):
             "location": "Loc",
             "start_time": timezone.now().isoformat(),
             "url": "https://example.com/event/1",
+            "metadata_tags": ["tag1"],
         }
         resp = self.client.post("/api/v1/events/", payload, format="json")
         self.assertEqual(resp.status_code, 201)

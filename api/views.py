@@ -49,12 +49,14 @@ class EventSchema(ModelSchema):
         model = Event
         model_fields = [
             "id",
+            "external_id",
             "title",
             "description",
             "location",
             "start_time",
             "end_time",
             "url",
+            "metadata_tags",
         ]
 
 
@@ -67,6 +69,7 @@ class EventCreateSchema(Schema):
     start_time: datetime
     end_time: datetime | None = None
     url: str | None = None
+    metadata_tags: List[str] | None = None
 
 
 class EventUpdateSchema(Schema):
@@ -78,6 +81,7 @@ class EventUpdateSchema(Schema):
     start_time: datetime | None = None
     end_time: datetime | None = None
     url: str | None = None
+    metadata_tags: List[str] | None = None
 
 
 class SourceSchema(ModelSchema):
@@ -234,6 +238,7 @@ def create_event(request, payload: EventCreateSchema):
         start_time=payload.start_time,
         end_time=payload.end_time,
         url=payload.url,
+        metadata_tags=payload.metadata_tags or [],
     )
     return 201, event
 
