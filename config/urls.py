@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from ninja import NinjaAPI
 from api.views import router as api_router
+from api.health import router as health_router
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 
@@ -11,6 +12,7 @@ from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshVie
 # credentials.
 api = NinjaAPI()
 api.add_router("/v1/", api_router)
+api.add_router("", health_router)
 
 
 urlpatterns = [
