@@ -3,7 +3,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from model_bakery import baker
 
-from events.models import Source
+from events.models import Source, SiteStrategy
 
 
 class SourceAPITests(TestCase):
@@ -51,3 +51,13 @@ class SourceAPITests(TestCase):
         self.assertTrue(
             Source.objects.filter(base_url="https://new.com", user=self.user).exists()
         )
+
+    def test_create_source_links_strategy(self):
+        self.authenticate()
+        SiteStrategy.objects.create(domain="link.com")
+        payload = {"base_url": "https://link.com", "name": "Link"}
+        resp = self.client.post("/api/v1/sources/", payload, format="json")
+        self.assertEqual(resp.status_code, 201)
+        source = Source.objects.get(id=resp.json()["id"])
+        strategy = SiteStrategy.objects.get(domain="link.com")
+        self.assertEqual(source.site_strategy, strategy)

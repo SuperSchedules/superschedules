@@ -7,6 +7,7 @@ class SourceAdmin(admin.ModelAdmin):
     list_display = (
         'name',
         'base_url',
+        'site_strategy',
         'status',
         'last_run_at',
         'date_added',
@@ -15,6 +16,7 @@ class SourceAdmin(admin.ModelAdmin):
         'user',
         'name',
         'base_url',
+        'site_strategy',
         'search_method',
         'status',
         'event',
