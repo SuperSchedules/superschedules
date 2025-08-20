@@ -261,10 +261,14 @@ def list_sources(request):
 
 @router.post("/sources/", auth=JWTAuth(), response={201: SourceSchema})
 def create_source(request, payload: SourceCreateSchema):
+    parsed = urlparse(payload.base_url)
+    domain = parsed.netloc
+    strategy = SiteStrategy.objects.filter(domain=domain).first()
     source = Source.objects.create(
         user=request.user,
         name=payload.name,
         base_url=payload.base_url,
+        site_strategy=strategy,
         search_method=payload.search_method or Source.SearchMethod.MANUAL,
         status=Source.Status.NOT_RUN,
     )
@@ -315,7 +319,14 @@ def create_event(request, payload: EventCreateSchema):
             raise HttpError(400, "Either source_id or url must be provided.")
         parsed = urlparse(payload.url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        source, _ = Source.objects.get_or_create(base_url=base_url)
+        strategy = SiteStrategy.objects.filter(domain=parsed.netloc).first()
+        source, created = Source.objects.get_or_create(
+            base_url=base_url,
+            defaults={"site_strategy": strategy},
+        )
+        if not created and source.site_strategy != strategy and strategy is not None:
+            source.site_strategy = strategy
+            source.save(update_fields=["site_strategy"])
 
     event = Event.objects.create(
         source=source,
@@ -419,11 +430,18 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
     job = get_object_or_404(ScrapingJob, id=job_id)
     parsed = urlparse(job.url)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
+    strategy = SiteStrategy.objects.filter(domain=parsed.netloc).first()
     source_defaults = {
         "search_method": Source.SearchMethod.MANUAL,
         "user": job.submitted_by,
+        "site_strategy": strategy,
     }
-    source, _ = Source.objects.get_or_create(base_url=base_url, defaults=source_defaults)
+    source, created = Source.objects.get_or_create(
+        base_url=base_url, defaults=source_defaults
+    )
+    if not created and source.site_strategy != strategy and strategy is not None:
+        source.site_strategy = strategy
+        source.save(update_fields=["site_strategy"])
     created_ids = []
     for ev in payload.events:
         event = Event.objects.create(

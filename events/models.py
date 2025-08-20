@@ -24,6 +24,13 @@ class Source(models.Model):
     )
     name = models.CharField(max_length=100, blank=True, null=True)
     base_url = models.URLField(blank=True)
+    site_strategy = models.ForeignKey(
+        'SiteStrategy',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sources'
+    )
     search_method = models.CharField(
         max_length=20,
         choices=SearchMethod.choices,
