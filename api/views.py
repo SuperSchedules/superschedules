@@ -1,13 +1,14 @@
 from typing import List
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from urllib.parse import urlparse
+import re
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.conf import settings
 from django.core import signing
 from django.core.mail import send_mail
-from ninja import ModelSchema, Router, Schema
+from ninja import ModelSchema, Router, Schema, Query
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 from django.shortcuts import get_object_or_404
@@ -284,8 +285,13 @@ def create_source(request, payload: SourceCreateSchema):
 @router.get(
     "/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema]
 )
-def list_events(request, start: date | None = None, end: date | None = None):
+def list_events(request, start: date | None = None, end: date | None = None, ids: List[int] = Query(None)):
     qs = Event.objects.all().order_by("start_time")
+
+    # If specific IDs are requested, filter by those and ignore date filters
+    if ids is not None and len(ids) > 0:
+        qs = qs.filter(id__in=ids)
+        return qs
 
     if start or end:
         if start:
@@ -499,3 +505,168 @@ def submit_batch(request, payload: BatchRequestSchema):
 def batch_status(request, batch_id: int):
     batch = get_object_or_404(ScrapeBatch, id=batch_id)
     return list(batch.jobs.all())
+
+
+# Chat API Schemas and Endpoints
+
+class ChatContextSchema(Schema):
+    current_date: str | None = None
+    location: str | None = None
+    preferences: dict | None = None
+
+
+class ChatRequestSchema(Schema):
+    message: str
+    context: ChatContextSchema | None = None
+    session_id: str | None = None
+    clear_suggestions: bool = False
+
+
+class ChatResponseSchema(Schema):
+    response: str
+    suggested_event_ids: List[int] | None = None
+    follow_up_questions: List[str] | None = None
+    session_id: str | None = None
+    clear_previous_suggestions: bool = False
+
+
+@router.post("/chat/", auth=JWTAuth(), response=ChatResponseSchema)
+def chat_message(request, payload: ChatRequestSchema):
+    """
+    Handle chat messages and return LLM responses with event suggestions.
+    
+    This endpoint will:
+    1. Process the user's natural language message
+    2. Use RAG to find relevant events from the database
+    3. Return a conversational response with event IDs
+    4. Support follow-up questions and context management
+    """
+    
+    # For now, we'll implement a stub that demonstrates the expected behavior
+    # TODO: Replace with actual LLM integration and RAG system
+    
+    message = payload.message.lower().strip()
+    context = payload.context or ChatContextSchema()
+    
+    # Generate a session ID if not provided
+    session_id = payload.session_id or str(uuid4())
+    
+    # Stub LLM response generation
+    response_text, suggested_ids, follow_ups, clear_previous = _generate_chat_response(
+        message, context, request.user
+    )
+    
+    # Handle clearing previous suggestions if conversation changes direction
+    if payload.clear_suggestions:
+        clear_previous = True
+    
+    return ChatResponseSchema(
+        response=response_text,
+        suggested_event_ids=suggested_ids,
+        follow_up_questions=follow_ups,
+        session_id=session_id,
+        clear_previous_suggestions=clear_previous
+    )
+
+
+def _generate_chat_response(message: str, context: ChatContextSchema, user) -> tuple[str, List[int], List[str], bool]:
+    """
+    Stub function for LLM response generation.
+    In production, this will be replaced with actual LLM calls and RAG.
+    """
+    
+    # Analyze the message for intent and entities
+    clear_previous = False
+    
+    # Check if this is a completely new topic (should clear previous suggestions)
+    topic_shift_keywords = ['actually', 'instead', 'nevermind', 'different', 'change']
+    if any(keyword in message for keyword in topic_shift_keywords):
+        clear_previous = True
+    
+    # Parse common entities
+    age_match = re.search(r'(\d+)[\s-]*(?:and|to|-)?\s*(\d+)?\s*year[s]?\s*old', message)
+    location_match = re.search(r'(?:in|at|near)\s+([a-zA-Z\s,]+?)(?:\s|$|,)', message)
+    time_match = re.search(r'(today|tomorrow|this\s+(?:week|weekend|month)|next\s+(?:\d+\s+)?(?:hours?|days?|week|month))', message)
+    
+    # Extract entities
+    ages = None
+    if age_match:
+        ages = [int(age_match.group(1))]
+        if age_match.group(2):
+            ages.append(int(age_match.group(2)))
+    
+    location = location_match.group(1).strip() if location_match else context.location
+    timeframe = time_match.group(1) if time_match else 'upcoming'
+    
+    # Generate response based on intent
+    if any(word in message for word in ['hello', 'hi', 'hey']):
+        response = "Hi! I'm here to help you find events. What kind of activities are you looking for?"
+        return response, [], ["What age group are you planning for?", "Any specific location in mind?"], clear_previous
+    
+    # Main event search intent
+    response_parts = ["I found some great"]
+    if ages:
+        if len(ages) == 1:
+            response_parts.append(f"activities for {ages[0]} year olds")
+        else:
+            response_parts.append(f"activities for {ages[0]}-{ages[1]} year olds")
+    else:
+        response_parts.append("events")
+    
+    if location:
+        response_parts.append(f"in {location}")
+    
+    if timeframe != 'upcoming':
+        response_parts.append(f"{timeframe}")
+    
+    response_parts.append("that might interest you!")
+    response = " ".join(response_parts)
+    
+    # Stub: Get some event IDs from database
+    # In production, this would use vector similarity search
+    event_ids = _get_relevant_event_ids(ages, location, timeframe, user)
+    
+    # Generate follow-up questions
+    follow_ups = []
+    if not ages:
+        follow_ups.append("What age group are you planning for?")
+    if not location:
+        follow_ups.append("What city or area are you in?")
+    if 'indoor' not in message and 'outdoor' not in message:
+        follow_ups.append("Do you prefer indoor or outdoor activities?")
+    
+    return response, event_ids, follow_ups[:2], clear_previous
+
+
+def _get_relevant_event_ids(ages: List[int] | None, location: str | None, timeframe: str, user) -> List[int]:
+    """
+    Stub function to get relevant event IDs.
+    In production, this will use pgvector for similarity search.
+    """
+    
+    # Get some events from the database as a stub
+    qs = Event.objects.all()
+    
+    # Apply basic filtering (in production, this would be much more sophisticated)
+    if location:
+        qs = qs.filter(location__icontains=location)
+    
+    if timeframe == 'today':
+        start_date = timezone.now().date()
+        end_date = start_date
+    elif timeframe == 'tomorrow':
+        start_date = timezone.now().date() + timedelta(days=1)
+        end_date = start_date
+    elif 'week' in timeframe:
+        start_date = timezone.now().date()
+        end_date = start_date + timedelta(days=7)
+    else:
+        start_date = timezone.now().date()
+        end_date = start_date + timedelta(days=30)
+    
+    start_dt = timezone.make_aware(datetime.combine(start_date, time.min))
+    end_dt = timezone.make_aware(datetime.combine(end_date, time.max))
+    qs = qs.filter(start_time__gte=start_dt, start_time__lte=end_dt)
+    
+    # Return up to 3 event IDs
+    return list(qs.values_list('id', flat=True)[:3])
