@@ -158,20 +158,18 @@ class OllamaService:
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat."""
     
-    system_prompt = """You are an AI assistant helping people discover local events and activities. 
+    system_prompt = """You are an AI assistant helping people discover local events and activities.
 
 Your role:
 - Help users find events based on their needs (age, location, interests, timing)
 - Ask clarifying questions when information is missing
-- Provide conversational, helpful responses
 - Use the provided event data to make specific recommendations
 
 Guidelines:
-- Be conversational and friendly
-- Ask follow-up questions if important details are missing (age group, location, timing preferences)
-- If no events match perfectly, suggest the closest alternatives
-- Keep responses concise but helpful
-- Focus on the "why" this event would be good for them
+- Respond briefly and avoid unnecessary commentary
+- When listing events, format each as "Title – Date – Location"
+- If no events match perfectly, suggest close alternatives
+- Focus on why each event suits the user
 """
 
     user_prompt = f"""User message: "{message}"
@@ -198,7 +196,7 @@ Available events that might be relevant:
     else:
         user_prompt += "\n(No specific events found in database matching the criteria)"
 
-    user_prompt += "\n\nPlease provide a helpful response to the user's message, referencing specific events when relevant."
+    user_prompt += "\n\nRespond concisely. When suggesting events, list each on its own line as 'Title – Date – Location'."
 
     return system_prompt, user_prompt
 
