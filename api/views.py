@@ -1,13 +1,15 @@
 from typing import List
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from urllib.parse import urlparse
+import re
+import asyncio
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.conf import settings
 from django.core import signing
 from django.core.mail import send_mail
-from ninja import ModelSchema, Router, Schema
+from ninja import ModelSchema, Router, Schema, Query
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 from django.shortcuts import get_object_or_404
@@ -22,6 +24,7 @@ from events.models import (
     ScrapeBatch,
 )
 from api.auth import ServiceTokenAuth
+from api.llm_service import get_llm_service, create_event_discovery_prompt
 
 User = get_user_model()
 
@@ -284,8 +287,13 @@ def create_source(request, payload: SourceCreateSchema):
 @router.get(
     "/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema]
 )
-def list_events(request, start: date | None = None, end: date | None = None):
+def list_events(request, start: date | None = None, end: date | None = None, ids: List[int] = Query(None)):
     qs = Event.objects.all().order_by("start_time")
+
+    # If specific IDs are requested, filter by those and ignore date filters
+    if ids is not None and len(ids) > 0:
+        qs = qs.filter(id__in=ids)
+        return qs
 
     if start or end:
         if start:
@@ -499,3 +507,309 @@ def submit_batch(request, payload: BatchRequestSchema):
 def batch_status(request, batch_id: int):
     batch = get_object_or_404(ScrapeBatch, id=batch_id)
     return list(batch.jobs.all())
+
+
+# Chat API Schemas and Endpoints
+
+class ChatContextSchema(Schema):
+    current_date: str | None = None
+    location: str | None = None
+    preferences: dict | None = None
+
+
+class ChatRequestSchema(Schema):
+    message: str
+    context: ChatContextSchema | None = None
+    session_id: str | None = None
+    clear_suggestions: bool = False
+    model_a: str | None = None  # Override default model A
+    model_b: str | None = None  # Override default model B
+
+
+class ModelResponseSchema(Schema):
+    model_name: str
+    response: str
+    response_time_ms: int
+    success: bool
+    error: str | None = None
+    suggested_event_ids: List[int] | None = None
+    follow_up_questions: List[str] | None = None
+
+
+class ChatResponseSchema(Schema):
+    model_a: ModelResponseSchema
+    model_b: ModelResponseSchema
+    session_id: str | None = None
+    clear_previous_suggestions: bool = False
+
+
+@router.post("/chat/", auth=JWTAuth(), response=ChatResponseSchema)
+async def chat_message(request, payload: ChatRequestSchema):
+    """
+    Handle chat messages and return dual LLM responses for A/B testing.
+    
+    This endpoint will:
+    1. Process the user's natural language message
+    2. Use RAG to find relevant events from the database
+    3. Generate responses from two different models in parallel
+    4. Return both responses for comparison
+    """
+    
+    message = payload.message.strip()
+    context = payload.context or ChatContextSchema()
+    
+    # Generate a session ID if not provided
+    session_id = payload.session_id or str(uuid4())
+    
+    # Handle clearing previous suggestions if conversation changes direction
+    clear_previous = payload.clear_suggestions
+    
+    # Get relevant events for RAG context
+    suggested_ids = _get_relevant_event_ids(
+        _parse_ages_from_message(message),
+        _parse_location_from_message(message, context),
+        _parse_timeframe_from_message(message),
+        request.user
+    )
+    
+    # Fetch event details for LLM context
+    events = []
+    if suggested_ids:
+        events_qs = Event.objects.filter(id__in=suggested_ids)
+        events = [
+            {
+                'id': event.id,
+                'title': event.title,
+                'description': event.description,
+                'location': event.location,
+                'start_time': event.start_time.isoformat() if event.start_time else None,
+                'end_time': event.end_time.isoformat() if event.end_time else None,
+            }
+            for event in events_qs
+        ]
+    
+    # Create prompts for LLM
+    system_prompt, user_prompt = create_event_discovery_prompt(
+        message, events, {
+            'current_date': context.current_date,
+            'location': context.location,
+            'preferences': context.preferences or {}
+        }
+    )
+    
+    # Get LLM service and generate dual responses
+    llm_service = get_llm_service()
+    
+    try:
+        comparison_result = await llm_service.compare_models(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            model_a=payload.model_a,
+            model_b=payload.model_b
+        )
+        
+        # Process model A response
+        model_a_follow_ups = _extract_follow_up_questions(comparison_result.model_a.response)
+        model_a_suggested_ids = suggested_ids if comparison_result.model_a.success else []
+        
+        # Process model B response  
+        model_b_follow_ups = _extract_follow_up_questions(comparison_result.model_b.response)
+        model_b_suggested_ids = suggested_ids if comparison_result.model_b.success else []
+        
+        # Check if this is a topic change that should clear previous suggestions
+        if not clear_previous:
+            clear_previous = _detect_topic_change(message)
+        
+        return ChatResponseSchema(
+            model_a=ModelResponseSchema(
+                model_name=comparison_result.model_a.model_name,
+                response=comparison_result.model_a.response,
+                response_time_ms=comparison_result.model_a.response_time_ms,
+                success=comparison_result.model_a.success,
+                error=comparison_result.model_a.error,
+                suggested_event_ids=model_a_suggested_ids,
+                follow_up_questions=model_a_follow_ups
+            ),
+            model_b=ModelResponseSchema(
+                model_name=comparison_result.model_b.model_name,
+                response=comparison_result.model_b.response,
+                response_time_ms=comparison_result.model_b.response_time_ms,
+                success=comparison_result.model_b.success,
+                error=comparison_result.model_b.error,
+                suggested_event_ids=model_b_suggested_ids,
+                follow_up_questions=model_b_follow_ups
+            ),
+            session_id=session_id,
+            clear_previous_suggestions=clear_previous
+        )
+        
+    except Exception as e:
+        # Fallback to stub responses if LLM service fails
+        fallback_response_text, fallback_suggested_ids, fallback_follow_ups, _ = _generate_chat_response(
+            message, context, request.user
+        )
+        
+        return ChatResponseSchema(
+            model_a=ModelResponseSchema(
+                model_name="fallback-stub",
+                response=fallback_response_text,
+                response_time_ms=0,
+                success=False,
+                error=f"LLM service error: {str(e)}",
+                suggested_event_ids=fallback_suggested_ids,
+                follow_up_questions=fallback_follow_ups
+            ),
+            model_b=ModelResponseSchema(
+                model_name="fallback-stub", 
+                response=fallback_response_text,
+                response_time_ms=0,
+                success=False,
+                error=f"LLM service error: {str(e)}",
+                suggested_event_ids=fallback_suggested_ids,
+                follow_up_questions=fallback_follow_ups
+            ),
+            session_id=session_id,
+            clear_previous_suggestions=clear_previous
+        )
+
+
+def _generate_chat_response(message: str, context: ChatContextSchema, user) -> tuple[str, List[int], List[str], bool]:
+    """
+    Stub function for LLM response generation.
+    In production, this will be replaced with actual LLM calls and RAG.
+    """
+    
+    # Analyze the message for intent and entities
+    clear_previous = False
+    
+    # Check if this is a completely new topic (should clear previous suggestions)
+    topic_shift_keywords = ['actually', 'instead', 'nevermind', 'different', 'change']
+    if any(keyword in message for keyword in topic_shift_keywords):
+        clear_previous = True
+    
+    # Parse common entities
+    age_match = re.search(r'(\d+)[\s-]*(?:and|to|-)?\s*(\d+)?\s*year[s]?\s*old', message)
+    location_match = re.search(r'(?:in|at|near)\s+([a-zA-Z\s,]+?)(?:\s|$|,)', message)
+    time_match = re.search(r'(today|tomorrow|this\s+(?:week|weekend|month)|next\s+(?:\d+\s+)?(?:hours?|days?|week|month))', message)
+    
+    # Extract entities
+    ages = None
+    if age_match:
+        ages = [int(age_match.group(1))]
+        if age_match.group(2):
+            ages.append(int(age_match.group(2)))
+    
+    location = location_match.group(1).strip() if location_match else context.location
+    timeframe = time_match.group(1) if time_match else 'upcoming'
+    
+    # Generate response based on intent
+    if any(word in message for word in ['hello', 'hi', 'hey']):
+        response = "Hi! I'm here to help you find events. What kind of activities are you looking for?"
+        return response, [], ["What age group are you planning for?", "Any specific location in mind?"], clear_previous
+    
+    # Main event search intent
+    response_parts = ["I found some great"]
+    if ages:
+        if len(ages) == 1:
+            response_parts.append(f"activities for {ages[0]} year olds")
+        else:
+            response_parts.append(f"activities for {ages[0]}-{ages[1]} year olds")
+    else:
+        response_parts.append("events")
+    
+    if location:
+        response_parts.append(f"in {location}")
+    
+    if timeframe != 'upcoming':
+        response_parts.append(f"{timeframe}")
+    
+    response_parts.append("that might interest you!")
+    response = " ".join(response_parts)
+    
+    # Stub: Get some event IDs from database
+    # In production, this would use vector similarity search
+    event_ids = _get_relevant_event_ids(ages, location, timeframe, user)
+    
+    # Generate follow-up questions
+    follow_ups = []
+    if not ages:
+        follow_ups.append("What age group are you planning for?")
+    if not location:
+        follow_ups.append("What city or area are you in?")
+    if 'indoor' not in message and 'outdoor' not in message:
+        follow_ups.append("Do you prefer indoor or outdoor activities?")
+    
+    return response, event_ids, follow_ups[:2], clear_previous
+
+
+def _get_relevant_event_ids(ages: List[int] | None, location: str | None, timeframe: str, user) -> List[int]:
+    """
+    Stub function to get relevant event IDs.
+    In production, this will use pgvector for similarity search.
+    """
+    
+    # Get some events from the database as a stub
+    qs = Event.objects.all()
+    
+    # Apply basic filtering (in production, this would be much more sophisticated)
+    if location:
+        qs = qs.filter(location__icontains=location)
+    
+    if timeframe == 'today':
+        start_date = timezone.now().date()
+        end_date = start_date
+    elif timeframe == 'tomorrow':
+        start_date = timezone.now().date() + timedelta(days=1)
+        end_date = start_date
+    elif 'week' in timeframe:
+        start_date = timezone.now().date()
+        end_date = start_date + timedelta(days=7)
+    else:
+        start_date = timezone.now().date()
+        end_date = start_date + timedelta(days=30)
+    
+    start_dt = timezone.make_aware(datetime.combine(start_date, time.min))
+    end_dt = timezone.make_aware(datetime.combine(end_date, time.max))
+    qs = qs.filter(start_time__gte=start_dt, start_time__lte=end_dt)
+    
+    # Return up to 3 event IDs
+    return list(qs.values_list('id', flat=True)[:3])
+
+
+def _parse_ages_from_message(message: str) -> List[int] | None:
+    """Extract age ranges from message."""
+    age_match = re.search(r'(\d+)[\s-]*(?:and|to|-)?\s*(\d+)?\s*year[s]?\s*old', message.lower())
+    if age_match:
+        ages = [int(age_match.group(1))]
+        if age_match.group(2):
+            ages.append(int(age_match.group(2)))
+        return ages
+    return None
+
+
+def _parse_location_from_message(message: str, context: ChatContextSchema) -> str | None:
+    """Extract location from message or context."""
+    location_match = re.search(r'(?:in|at|near)\s+([a-zA-Z\s,]+?)(?:\s|$|,)', message.lower())
+    if location_match:
+        return location_match.group(1).strip()
+    return context.location
+
+
+def _parse_timeframe_from_message(message: str) -> str:
+    """Extract timeframe from message."""
+    time_match = re.search(r'(today|tomorrow|this\s+(?:week|weekend|month)|next\s+(?:\d+\s+)?(?:hours?|days?|week|month))', message.lower())
+    return time_match.group(1) if time_match else 'upcoming'
+
+
+def _detect_topic_change(message: str) -> bool:
+    """Detect if message indicates a topic change."""
+    topic_shift_keywords = ['actually', 'instead', 'nevermind', 'different', 'change']
+    return any(keyword in message.lower() for keyword in topic_shift_keywords)
+
+
+def _extract_follow_up_questions(response: str) -> List[str]:
+    """Extract follow-up questions from LLM response."""
+    # Simple heuristic - look for sentences ending with ?
+    import re
+    questions = re.findall(r'[^.!?]*\?', response)
+    return [q.strip() for q in questions[:3]]  # Limit to 3 questions

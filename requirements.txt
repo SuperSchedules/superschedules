@@ -10,3 +10,4 @@ psycopg2-binary
 model-bakery
 django-dynamic-fixture
 django-grappelli
+ollama==0.5.3
