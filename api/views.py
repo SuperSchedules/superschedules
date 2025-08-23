@@ -2,7 +2,8 @@ from typing import List
 from datetime import date, datetime, time, timedelta
 from urllib.parse import urlparse
 import re
-import asyncio
+
+from asgiref.sync import async_to_sync
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -544,7 +545,7 @@ class ChatResponseSchema(Schema):
 
 
 @router.post("/chat/", auth=JWTAuth(), response=ChatResponseSchema)
-async def chat_message(request, payload: ChatRequestSchema):
+def chat_message(request, payload: ChatRequestSchema):
     """
     Handle chat messages and return dual LLM responses for A/B testing.
     
@@ -599,9 +600,9 @@ async def chat_message(request, payload: ChatRequestSchema):
     
     # Get LLM service and generate dual responses
     llm_service = get_llm_service()
-    
+
     try:
-        comparison_result = await llm_service.compare_models(
+        comparison_result = async_to_sync(llm_service.compare_models)(
             prompt=user_prompt,
             system_prompt=system_prompt,
             model_a=payload.model_a,

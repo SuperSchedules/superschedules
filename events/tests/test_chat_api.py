@@ -3,9 +3,12 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
-from events.models import Event, Source
-from django.utils import timezone
+from unittest.mock import patch
 from datetime import datetime, timedelta
+from django.utils import timezone
+
+from events.models import Event, Source
+from api.llm_service import ModelResponse, ChatComparisonResult
 
 User = get_user_model()
 
@@ -43,7 +46,7 @@ class ChatAPITestCase(TestCase):
         
         self.event2 = Event.objects.create(
             source=self.source,
-            external_id="test-2", 
+            external_id="test-2",
             title="Family Fun Day",
             description="Activities for families with young children",
             location="Newton Community Center",
@@ -51,7 +54,24 @@ class ChatAPITestCase(TestCase):
             end_time=timezone.now() + timedelta(days=2, hours=2)
         )
 
-    def test_chat_endpoint_basic_message(self):
+    class DummyLLMService:
+        async def compare_models(self, *args, **kwargs):
+            response = "Here are some activities you might like. Any preferences?"
+            model_response = ModelResponse(
+                model_name="dummy",
+                response=response,
+                response_time_ms=10,
+                success=True,
+            )
+            return ChatComparisonResult(
+                query=kwargs.get("prompt", ""),
+                model_a=model_response,
+                model_b=model_response,
+                timestamp=datetime.now(),
+            )
+
+    @patch('api.views.get_llm_service', return_value=DummyLLMService())
+    def test_chat_endpoint_basic_message(self, _mock_service):
         """Test basic chat functionality"""
         url = reverse('api-1.0.0:chat_message')
         data = {
@@ -60,45 +80,45 @@ class ChatAPITestCase(TestCase):
                 "location": "Newton"
             }
         }
-        
+
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, 200)
-        
-        response_data = response.json()
-        self.assertIn('response', response_data)
-        self.assertIn('suggested_event_ids', response_data)
-        self.assertIn('follow_up_questions', response_data)
-        self.assertIn('session_id', response_data)
-        
-        # Should return a meaningful response
-        self.assertIn('activities', response_data['response'].lower())
 
-    def test_chat_endpoint_greeting(self):
+        response_data = response.json()
+        self.assertIn('model_a', response_data)
+        self.assertIn('model_b', response_data)
+        self.assertIn('session_id', response_data)
+        self.assertIn('activities', response_data['model_a']['response'].lower())
+        self.assertTrue(len(response_data['model_a']['follow_up_questions']) > 0)
+
+    @patch('api.views.get_llm_service', return_value=DummyLLMService())
+    def test_chat_endpoint_greeting(self, _mock_service):
         """Test greeting response"""
         url = reverse('api-1.0.0:chat_message')
         data = {
             "message": "Hello"
         }
-        
+
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, 200)
-        
-        response_data = response.json()
-        self.assertIn('Hi', response_data['response'])
-        self.assertEqual(response_data['suggested_event_ids'], [])
-        self.assertTrue(len(response_data['follow_up_questions']) > 0)
 
-    def test_chat_endpoint_with_session(self):
+        response_data = response.json()
+        self.assertIn('model_a', response_data)
+        self.assertIsInstance(response_data['model_a']['suggested_event_ids'], list)
+        self.assertTrue(len(response_data['model_a']['follow_up_questions']) > 0)
+
+    @patch('api.views.get_llm_service', return_value=DummyLLMService())
+    def test_chat_endpoint_with_session(self, _mock_service):
         """Test session management"""
         url = reverse('api-1.0.0:chat_message')
         data = {
             "message": "I need activities for kids",
             "session_id": "test-session-123"
         }
-        
+
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, 200)
-        
+
         response_data = response.json()
         # Should return either the provided session ID or generate a new one
         self.assertIsNotNone(response_data['session_id'])
@@ -129,12 +149,13 @@ class ChatAPITestCase(TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['id'], self.event1.id)
 
-    def test_authentication_required(self):
+    @patch('api.views.get_llm_service', return_value=DummyLLMService())
+    def test_authentication_required(self, _mock_service):
         """Test that authentication is required for chat endpoint"""
         self.client.credentials()  # Remove authentication
-        
+
         url = reverse('api-1.0.0:chat_message')
         data = {"message": "Hello"}
-        
+
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, 401)
