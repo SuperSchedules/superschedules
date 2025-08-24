@@ -38,8 +38,8 @@ class ChatComparisonResult:
 class OllamaService:
     """Service for interacting with Ollama LLM models."""
     
-    # Default models for A/B testing
-    DEFAULT_MODEL_A = "llama3.2:1b"
+    # Default models for A/B testing - 8B vs 3B comparison
+    DEFAULT_MODEL_A = "llama3.1:8b"
     DEFAULT_MODEL_B = "llama3.2:3b"
     
     def __init__(self):
@@ -49,7 +49,7 @@ class OllamaService:
         """Get list of available Ollama models."""
         try:
             models = await self.client.list()
-            return [model['name'] for model in models['models']]
+            return [model.get('name', model.get('model', 'unknown')) for model in models.get('models', [])]
         except Exception as e:
             logger.error(f"Failed to get available models: {e}")
             return []
@@ -59,7 +59,8 @@ class OllamaService:
         model: str, 
         prompt: str,
         system_prompt: Optional[str] = None,
-        timeout_seconds: int = 30
+        timeout_seconds: int = 30,
+        stream: bool = False
     ) -> ModelResponse:
         """Generate response from a single model."""
         start_time = datetime.now()
@@ -110,6 +111,66 @@ class OllamaService:
                 error=str(e)
             )
     
+    async def generate_streaming_response(
+        self, 
+        model: str, 
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        timeout_seconds: int = 60
+    ):
+        """Generate streaming response from a single model."""
+        try:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            start_time = datetime.now()
+            full_response = ""
+            
+            # Stream response from Ollama
+            async for chunk in await self.client.chat(
+                model=model,
+                messages=messages,
+                stream=True
+            ):
+                token = chunk['message']['content']
+                full_response += token
+                
+                # Yield each token
+                yield {
+                    'token': token,
+                    'done': False,
+                    'model_name': model,
+                    'response_time_ms': int((datetime.now() - start_time).total_seconds() * 1000)
+                }
+            
+            # Final response with complete metadata
+            end_time = datetime.now()
+            response_time = int((end_time - start_time).total_seconds() * 1000)
+            
+            yield {
+                'token': '',
+                'done': True,
+                'model_name': model,
+                'response_time_ms': response_time,
+                'full_response': full_response.strip(),
+                'success': True
+            }
+            
+        except Exception as e:
+            end_time = datetime.now()
+            response_time = int((end_time - start_time).total_seconds() * 1000)
+            
+            yield {
+                'token': '',
+                'done': True,
+                'model_name': model,
+                'response_time_ms': response_time,
+                'success': False,
+                'error': str(e)
+            }
+    
     async def compare_models(
         self,
         prompt: str,
@@ -158,18 +219,30 @@ class OllamaService:
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat."""
     
-    system_prompt = """You are an AI assistant helping people discover local events and activities.
+    system_prompt = """You are an expert local events concierge helping families and individuals discover perfect activities.
 
-Your role:
-- Help users find events based on their needs (age, location, interests, timing)
-- Ask clarifying questions when information is missing
-- Use the provided event data to make specific recommendations
+Your expertise:
+- Match events to specific age groups, interests, and constraints
+- Understand timing nuances (weekday vs weekend, seasonal preferences)
+- Provide context about why events are good matches
+- Suggest alternatives when exact matches aren't available
 
-Guidelines:
-- Respond briefly and avoid unnecessary commentary
-- When listing events, format each as "Title – Date – Location"
-- If no events match perfectly, suggest close alternatives
-- Focus on why each event suits the user
+Response format (follow this example structure):
+"Here's what we found:
+
+• **Event Title** at Location on Date/Time - Brief explanation of why it fits their needs [URL if available]
+• **Another Event** at Location on Date/Time - Another brief explanation [URL if available]
+
+A few thoughts: Explain why these are good matches, address any constraints they mentioned, and suggest alternatives if needed.
+
+What specific aspects are most important to you - timing, location, or activities?"
+
+Always:
+- Start with "Here's what we found:" or similar greeting
+- Use bullet points (•) for event recommendations
+- Include event URLs when available in [square brackets]
+- End with brief thoughts and a clarifying question
+- Keep explanations concise but helpful
 """
 
     user_prompt = f"""User message: "{message}"
@@ -183,20 +256,51 @@ Available events that might be relevant:
 """
 
     if events:
-        for i, event in enumerate(events[:5], 1):  # Limit to 5 events
+        for i, event in enumerate(events[:10], 1):  # Increased to 10 events for richer context
             user_prompt += f"\n{i}. {event.get('title', 'Untitled Event')}"
-            if event.get('location'):
-                user_prompt += f" at {event['location']}"
+            
+            # Date and time on new line
             if event.get('start_time'):
-                user_prompt += f" on {event['start_time']}"
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(event['start_time'].replace('Z', '+00:00'))
+                    formatted_date = dt.strftime('%A, %B %d')
+                    formatted_time = dt.strftime('%I:%M %p')
+                    user_prompt += f"\n{formatted_date} - {formatted_time}"
+                    
+                    if event.get('end_time'):
+                        try:
+                            dt_end = datetime.fromisoformat(event['end_time'].replace('Z', '+00:00'))
+                            formatted_end = dt_end.strftime('%I:%M %p')
+                            user_prompt += f" to {formatted_end}"
+                        except:
+                            pass
+                except:
+                    user_prompt += f"\n{event['start_time']}"
+            
+            # Location on new line
+            if event.get('location'):
+                user_prompt += f"\n{event['location']}"
+            
+            # Abbreviated description on new line
             if event.get('description'):
-                # Truncate long descriptions
-                desc = event['description'][:200] + "..." if len(event['description']) > 200 else event['description']
-                user_prompt += f" - {desc}"
+                desc = event['description'][:150] + "..." if len(event['description']) > 150 else event['description']
+                user_prompt += f"\n{desc}"
+            
+            # URL on new line
+            if event.get('url'):
+                user_prompt += f"\n{event['url']}"
+                
+            user_prompt += "\n"
     else:
-        user_prompt += "\n(No specific events found in database matching the criteria)"
+        user_prompt += "\n(No specific events found in database - suggest general alternatives or ask for more details)"
 
-    user_prompt += "\n\nRespond concisely. When suggesting events, list each on its own line as 'Title – Date – Location'."
+    user_prompt += """
+Please provide helpful, specific recommendations using the bullet-point format. Include:
+1. Start with \"Here's what we found:\" or similar greeting
+2. Use bullet points (•) for the most relevant events with URLs when available
+3. Brief explanations of WHY each event fits their needs
+4. End with \"A few thoughts:\" section and a follow-up question"""
 
     return system_prompt, user_prompt
 

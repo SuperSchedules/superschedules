@@ -64,14 +64,6 @@ class Migration(migrations.Migration):
                 ),
             ],
             options={
-                "indexes": [
-                    django.contrib.postgres.indexes.GinIndex(
-                        fields=["description"], name="desc_gin_idx"
-                    ),
-                    django.contrib.postgres.indexes.GinIndex(
-                        fields=["embedding"], name="embed_gin_idx"
-                    ),
-                ],
                 "unique_together": {("source", "external_id")},
             },
         ),

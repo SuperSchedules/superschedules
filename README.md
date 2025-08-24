@@ -1,10 +1,48 @@
 # Superschedules
 
+## Overview
+Superschedules is a Django-based backend for event discovery and management, with an optional FastAPI chat service for streaming LLM-powered assistance.
+
+## Prerequisites
+- Python 3.11+, PostgreSQL 15+ (pgvector recommended), pip
+- macOS users: see `install_postgres_macos.sh`
+
+## Quickstart
+- Create/activate env: `source schedules_dev/bin/activate` (or `python -m venv .venv && source .venv/bin/activate`)
+- Install deps: `pip install -r requirements.txt`
+- Configure env (example):
+  - `export DJANGO_SECRET_KEY=dev-secret`
+  - `export DB_HOST=localhost DB_PORT=5432`
+  - `export DB_NAME=superschedules DB_USER=superschedules DB_PASSWORD=yourpass`
+- Migrations: `python manage.py migrate`
+- Create admin: `python manage.py createsuperuser`
+- Run API: `python manage.py runserver 8000`
+- Run Chat (optional): `python start_chat_service.py` (FastAPI on 8002)
+
+## Services & Ports
+- Django API: `http://localhost:8000`
+- Admin: `/admin` (Grappelli at `/grappelli`)
+- Chat service (FastAPI): `http://localhost:8002` (see `STREAMING_SETUP.md`)
+
+## API & Auth
+- Health: `GET /api/live`, `GET /api/ready`
+- JWT: `POST /api/v1/token/`, `POST /api/v1/token/refresh/`
+
 ## Running Tests
+- All tests: `python manage.py test`
+- Targeted: `python manage.py test api` or `python manage.py test events`
+Note: tests use a custom pgvector-aware runner and fall back to SQLite if pgvector isn’t available.
 
-This project uses Django's test framework. To run the tests, use:
+## Project Structure
+- `config/`: Django project config (`settings.py`, `urls.py`)
+- `events/`: Core app (models, admin, migrations, tests/)
+- `api/`: Services (RAG/LLM), API views, tests
+- `chat_service/`: FastAPI streaming chat (`fastapi_app.py`)
 
-```
-python manage.py test
-```
+## Troubleshooting
+- Ports busy: free 8000/8002
+- CORS: default origins are 5173/5174 in settings
+- Env: copy `.env.example` and export required vars; never commit secrets
 
+## Contributing
+See `AGENTS.md` for coding conventions, testing, and PR guidelines.

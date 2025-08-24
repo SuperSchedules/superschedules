@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 import os
 
@@ -52,12 +53,50 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Database configuration that works with both local and remote PostgreSQL
+DB_HOST = os.environ.get('DB_HOST', '')
+DB_PORT = os.environ.get('DB_PORT', '5432')
+DB_NAME = os.environ.get('DB_NAME', 'superschedules')
+DB_USER = os.environ.get('DB_USER', 'superschedules')
+DB_PASSWORD = os.environ.get('DB_PASSWORD', '')
+
+# If no host specified, assume local peer authentication
+if not DB_HOST:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': '',  # Empty for peer auth
+            'HOST': '',      # Unix socket
+            'PORT': '',      # Default socket
+        }
     }
-}
+else:
+    # Remote database configuration
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASSWORD,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+        }
+    }
+# Temporary: read-only alias pointing at your old SQLite file
+SQLITE_PATH = Path(BASE_DIR) / "db.sqlite3"   # adjust path
+
+DATABASES["sqlite_tmp"] = cfg = deepcopy(DATABASES["default"])
+cfg.update({
+    "ENGINE": "django.db.backends.sqlite3",
+    "NAME": str(SQLITE_PATH),
+    "USER": "",
+    "PASSWORD": "",
+    "HOST": "",
+    "PORT": "",
+})
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -104,6 +143,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
 ]
+
+# Custom test runner for pgvector support
+TEST_RUNNER = 'api.test_runner.PgVectorTestRunner'
 
 # Email configuration for password reset
 EMAIL_BACKEND = os.environ.get(
