@@ -11,19 +11,28 @@ class PgVectorTestRunner(DiscoverRunner):
     """
     
     def setup_databases(self, **kwargs):
-        """Set up test databases, falling back to SQLite if pgvector isn't available."""
+        """Set up test databases, with graceful fallback to SQLite when Postgres/pgvector is unavailable."""
         from django.conf import settings
         
         try:
             # Try to set up PostgreSQL with pgvector
             return super().setup_databases(**kwargs)
         except Exception as e:
-            if "vector" in str(e).lower():
-                print("⚠️  pgvector not available in test database")
-                print("📝 Falling back to SQLite for testing")
+            msg = str(e).lower()
+            should_fallback = any(
+                key in msg for key in [
+                    "vector",  # pgvector extension issues
+                    "could not connect",
+                    "connection refused",
+                    "server on socket",
+                    "operationalerror",
+                ]
+            )
+            if should_fallback:
+                print("⚠️  Postgres/pgvector not available for tests")
+                print("📝 Falling back to in-memory SQLite for testing")
                 
                 # Override database settings for tests
-                original_databases = settings.DATABASES.copy()
                 settings.DATABASES = {
                     'default': {
                         'ENGINE': 'django.db.backends.sqlite3',
@@ -31,12 +40,7 @@ class PgVectorTestRunner(DiscoverRunner):
                     }
                 }
                 
-                try:
-                    # Set up SQLite instead
-                    result = super().setup_databases(**kwargs)
-                    return result
-                finally:
-                    # Don't restore original settings here - let tests run
-                    pass
+                # Set up SQLite instead
+                return super().setup_databases(**kwargs)
             else:
                 raise
