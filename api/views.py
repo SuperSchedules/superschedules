@@ -55,6 +55,10 @@ class PasswordResetConfirmSchema(Schema):
     password: str
 
 
+class MessageSchema(Schema):
+    message: str
+
+
 class EventSchema(ModelSchema):
     class Config:
         model = Event
@@ -236,7 +240,11 @@ def request_password_reset(request, payload: PasswordResetRequestSchema):
     return {"message": "Check your email for a password reset link."}
 
 
-@router.post("/reset/confirm/", auth=None)
+@router.post(
+    "/reset/confirm/",
+    auth=None,
+    response={200: MessageSchema, 400: MessageSchema},
+)
 def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
     try:
         data = signing.loads(
@@ -246,7 +254,8 @@ def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
         )
         user = User.objects.get(id=data["user_id"])
     except (BadSignature, SignatureExpired, User.DoesNotExist):
-        raise HttpError(400, "Invalid or expired token.")
+        # Return a JSON payload with a message key to match tests
+        return 400, {"message": "Invalid or expired token."}
 
     user.set_password(payload.password)
     user.save()
@@ -286,7 +295,7 @@ def create_source(request, payload: SourceCreateSchema):
 
 
 @router.get(
-    "/events/", auth=[JWTAuth(), ServiceTokenAuth()], response=List[EventSchema]
+    "/events/", auth=[ServiceTokenAuth(), JWTAuth()], response=List[EventSchema]
 )
 def list_events(request, start: date | None = None, end: date | None = None, ids: List[int] = Query(None)):
     qs = Event.objects.all().order_by("start_time")
@@ -313,7 +322,7 @@ def list_events(request, start: date | None = None, end: date | None = None, ids
 
 
 @router.get(
-    "/events/{event_id}", auth=[JWTAuth(), ServiceTokenAuth()], response=EventSchema
+    "/events/{event_id}", auth=[ServiceTokenAuth(), JWTAuth()], response=EventSchema
 )
 def get_event(request, event_id: int):
     return get_object_or_404(Event, id=event_id)
@@ -399,8 +408,9 @@ def report_site_strategy(request, domain: str, payload: SiteStrategyUpdateSchema
     return strategy
 
 
+# Allow authenticated users (JWT) to override strategies via PUT
 @router.put(
-    "/sites/{domain}/strategy", auth=ServiceTokenAuth(), response=SiteStrategySchema
+    "/sites/{domain}/strategy", auth=JWTAuth(), response=SiteStrategySchema
 )
 def override_site_strategy(request, domain: str, payload: SiteStrategyUpdateSchema):
     strategy, _ = SiteStrategy.objects.get_or_create(domain=domain)
@@ -428,7 +438,7 @@ def submit_scrape(request, payload: ScrapeRequestSchema):
 
 
 @router.get(
-    "/scrape/{job_id}", auth=[JWTAuth(), ServiceTokenAuth()], response=ScrapingJobSchema
+    "/scrape/{job_id}", auth=[ServiceTokenAuth(), JWTAuth()], response=ScrapingJobSchema
 )
 def get_scrape_job(request, job_id: int):
     return get_object_or_404(ScrapingJob, id=job_id)
@@ -502,7 +512,7 @@ def submit_batch(request, payload: BatchRequestSchema):
 
 @router.get(
     "/scrape/batch/{batch_id}/",
-    auth=[JWTAuth(), ServiceTokenAuth()],
+    auth=[ServiceTokenAuth(), JWTAuth()],
     response=List[ScrapingJobSchema],
 )
 def batch_status(request, batch_id: int):
