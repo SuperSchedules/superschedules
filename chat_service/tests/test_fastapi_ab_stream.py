@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
 from fastapi.testclient import TestClient
 
-from chat_service.fastapi_app import app
+from chat_service.app import app
 
 
 class FastAPIDualStreamTests(TestCase):
@@ -68,4 +68,3 @@ class FastAPIDualStreamTests(TestCase):
         assert any(b'"model": "B"' in c and b'"done": false' in c for c in chunks)
         assert any(b'"model": "B"' in c and b'"done": true' in c for c in chunks)
         assert any(b'"model": "SYSTEM"' in c and b'"done": true' in c for c in chunks)
-

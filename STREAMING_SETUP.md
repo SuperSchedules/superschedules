@@ -22,15 +22,15 @@ Frontend (Port 5173)
 ### 1. Start Django (Terminal 1)
 ```bash
 cd /Users/gregk/superschedules
-source schedules_dev/bin/activate
+source .venv/bin/activate
 python manage.py runserver 8000
 ```
 
 ### 2. Start FastAPI Chat Service (Terminal 2)
 ```bash
 cd /Users/gregk/superschedules
-source schedules_dev/bin/activate
-python start_chat_service.py
+source .venv/bin/activate
+python scripts/start_chat_service.py
 ```
 
 ### 3. Start Frontend (Terminal 3)
@@ -84,6 +84,6 @@ The FastAPI service uses the same JWT tokens as Django:
 ## Troubleshooting
 
 **Port conflicts**: Make sure ports 8000, 8001, and 5173 are available
-**CORS issues**: Frontend origins are configured in `fastapi_app.py`
+**CORS issues**: Frontend origins are configured in `chat_service/app.py`
 **Auth issues**: Check that JWT tokens are valid and not expired
 **Django setup**: Ensure `DJANGO_SETTINGS_MODULE` is correctly set

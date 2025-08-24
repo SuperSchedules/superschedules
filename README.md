@@ -5,10 +5,9 @@ Superschedules is a Django-based backend for event discovery and management, wit
 
 ## Prerequisites
 - Python 3.11+, PostgreSQL 15+ (pgvector recommended), pip
-- macOS users: see `install_postgres_macos.sh`
 
 ## Quickstart
-- Create/activate env: `source schedules_dev/bin/activate` (or `python -m venv .venv && source .venv/bin/activate`)
+- Create/activate env: `python -m venv .venv --prompt "schedules_dev" && source .venv/bin/activate`
 - Install deps: `pip install -r requirements.txt`
 - Configure env (example):
   - `export DJANGO_SECRET_KEY=dev-secret`
@@ -17,12 +16,12 @@ Superschedules is a Django-based backend for event discovery and management, wit
 - Migrations: `python manage.py migrate`
 - Create admin: `python manage.py createsuperuser`
 - Run API: `python manage.py runserver 8000`
-- Run Chat (optional): `python start_chat_service.py` (FastAPI on 8002)
+- Run Chat (optional): `python scripts/start_chat_service.py` (FastAPI on 8002)
 
 ## Services & Ports
 - Django API: `http://localhost:8000`
 - Admin: `/admin` (Grappelli at `/grappelli`)
-- Chat service (FastAPI): `http://localhost:8002` (see `STREAMING_SETUP.md`)
+- Chat service (FastAPI): `http://localhost:8002` (see `docs/STREAMING_SETUP.md`)
 
 ## API & Auth
 - Health: `GET /api/live`, `GET /api/ready`
@@ -37,7 +36,9 @@ Note: tests use a custom pgvector-aware runner and fall back to SQLite if pgvect
 - `config/`: Django project config (`settings.py`, `urls.py`)
 - `events/`: Core app (models, admin, migrations, tests/)
 - `api/`: Services (RAG/LLM), API views, tests
-- `chat_service/`: FastAPI streaming chat (`fastapi_app.py`)
+- `chat_service/`: FastAPI streaming chat (`app.py`)
+- `scripts/`: Utility scripts (e.g., start chat, prompt tests)
+- `docs/`: Additional documentation (streaming setup, agents)
 
 ## Troubleshooting
 - Ports busy: free 8000/8002
@@ -45,4 +46,4 @@ Note: tests use a custom pgvector-aware runner and fall back to SQLite if pgvect
 - Env: copy `.env.example` and export required vars; never commit secrets
 
 ## Contributing
-See `AGENTS.md` for coding conventions, testing, and PR guidelines.
+See `docs/AGENTS.md` for coding conventions, testing, and PR guidelines.

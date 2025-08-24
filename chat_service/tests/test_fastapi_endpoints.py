@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 
 from fastapi.testclient import TestClient
 
-from chat_service.fastapi_app import app
+from chat_service.app import app
 
 
 class FastAPIServiceTests(TestCase):
@@ -59,4 +59,3 @@ class FastAPIServiceTests(TestCase):
         assert any(b'"model": "B"' in c and b'"done": false' in c for c in chunks)
         assert any(b'"model": "B"' in c and b'"done": true' in c for c in chunks)
         assert any(b'"model": "SYSTEM"' in c and b'"done": true' in c for c in chunks)
-
