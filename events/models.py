@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from pgvector.django import VectorField
+from django.contrib.postgres.indexes import GinIndex
 import secrets
 
 class Source(models.Model):
@@ -138,6 +139,10 @@ class Event(models.Model):
 
     class Meta:
         unique_together = ('source', 'external_id')
+        indexes = [
+            GinIndex(fields=['description'], name='desc_gin_idx'),
+            GinIndex(fields=['embedding'], name='embed_gin_idx'),
+        ]
 
     def __str__(self):
         return self.title

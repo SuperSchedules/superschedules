@@ -26,6 +26,7 @@ from ninja_jwt.exceptions import InvalidToken, TokenError
 from events.models import Event
 from api.llm_service import get_llm_service, create_event_discovery_prompt
 from api.rag_service import get_rag_service
+from . import debug_routes
 
 app = FastAPI(
     title="Superschedules Chat Service",
@@ -33,6 +34,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.include_router(debug_routes.router)
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,

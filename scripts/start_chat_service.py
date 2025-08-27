@@ -1,27 +1,34 @@
 #!/usr/bin/env python
-"""
-Startup script for the FastAPI chat service.
-Run this alongside your Django server for streaming chat functionality.
-"""
+# scripts/start_chat_service.py
+from __future__ import annotations
+import os, sys
+from pathlib import Path
 import uvicorn
-import sys
-import os
+from uvicorn.config import Config
 
-# Add current directory to path so Django can be imported
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)
 
-if __name__ == "__main__":
-    print("🚀 Starting FastAPI Chat Service...")
-    print("📡 Service will be available at: http://localhost:8002")
-    print("📚 API docs at: http://localhost:8002/docs")
-    print("🔄 Make sure your Django server is running on port 8000")
-    print("💾 Collector service on port 8001")
-    print()
-    
-    uvicorn.run(
+# unbuffered stdout so prints show up immediately
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+
+def main():
+    cfg = Config(
         "chat_service.app:app",
         host="0.0.0.0",
         port=8002,
-        reload=True,
-        log_level="info"
+        reload=False,          # keep off to avoid watcher spin
+        loop="asyncio",        # <-- pure-Python loop
+        http="h11",            # <-- pure-Python HTTP
+        log_level="warning",
+        access_log=False,
+        timeout_keep_alive=75,
     )
+    print(f"Project root: {ROOT}", flush=True)
+    print(f"Loop: {cfg.loop}  HTTP: {cfg.http}", flush=True)
+    uvicorn.run(cfg)
+
+if __name__ == "__main__":
+    main()
+
