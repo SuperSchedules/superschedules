@@ -105,9 +105,9 @@ async def stream_chat(
             relevant_events = await get_relevant_events(request.message)
             
             if request.single_model_mode:
-                # Single model mode - use preferred model or default to 3B
-                model_name = request.preferred_model or llm_service.DEFAULT_MODEL_B  # Default to 3B model
-                model_id = "B"  # Always use B for single mode (the 3B model)
+                # Single model mode - force DeepSeek (ignore frontend preference for now)
+                model_name = llm_service.DEFAULT_MODEL_A  # Always use DeepSeek model
+                model_id = "A"  # Always use A for single mode (the DeepSeek model)
                 
                 model_generator = stream_model_response(
                     llm_service, 
@@ -214,9 +214,10 @@ async def stream_model_response(
             model_name = llm_service.DEFAULT_MODEL_A if model_id == "A" else llm_service.DEFAULT_MODEL_B
         
         # Create system and user prompts
+        current_time = datetime.now()
         system_prompt, user_prompt = create_event_discovery_prompt(
             message, context_events, {
-                'current_date': datetime.now().isoformat(),
+                'current_date': current_time.strftime('%A, %B %d, %Y at %I:%M %p'),
                 'location': None,
                 'preferences': {}
             }
@@ -291,8 +292,9 @@ async def get_relevant_events(message: str) -> List[Dict]:
         def run_rag_search():
             return rag_service.get_context_events(
                 user_message=message,
-                max_events=10,
-                similarity_threshold=0.2  # Lower threshold for more results
+                max_events=8,
+                similarity_threshold=0.3,  # Higher threshold for more relevant results
+                time_filter_days=14  # Only show events in next 2 weeks
             )
         
         context_events = await loop.run_in_executor(None, run_rag_search)
@@ -386,7 +388,3 @@ async def merge_async_generators(*generators):
         # Wait for all tasks to complete
         await asyncio.gather(*tasks, return_exceptions=True)
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002, reload=True)

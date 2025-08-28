@@ -1,8 +1,13 @@
 from django.db import models
 from django.conf import settings
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from pgvector.django import VectorField
 from django.contrib.postgres.indexes import GinIndex
 import secrets
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Source(models.Model):
     class Status(models.TextChoices):
@@ -159,3 +164,41 @@ class ServiceToken(models.Model):
 
     def __str__(self):
         return self.name
+
+
+@receiver(post_save, sender=Event)
+def update_event_embedding(sender, instance, created, update_fields=None, **kwargs):
+    """
+    Auto-generate RAG embedding when Event is created or updated.
+    
+    Uses update_fields to intelligently detect when embedding needs regeneration:
+    - Always generate for new events
+    - For updates, only regenerate if content fields changed or no embedding exists
+    """
+    should_update = False
+    
+    if created:
+        should_update = True
+    elif instance.embedding is None:
+        # Always generate if missing
+        should_update = True
+    elif update_fields is None:
+        # Full save() called - can't detect changes, so be conservative
+        # Only update if no embedding exists to avoid unnecessary work
+        should_update = False
+    else:
+        # Specific fields updated - check if any affect embedding content
+        embedding_fields = {'title', 'description', 'location', 'start_time'}
+        should_update = bool(embedding_fields.intersection(update_fields))
+    
+    if should_update:
+        try:
+            # Import here to avoid circular imports
+            from api.rag_service import get_rag_service
+            
+            logger.info(f"Generating embedding for event: {instance.title}")
+            rag_service = get_rag_service()
+            rag_service.update_event_embeddings(event_ids=[instance.id])
+            
+        except Exception as e:
+            logger.error(f"Failed to generate embedding for event {instance.id}: {e}")

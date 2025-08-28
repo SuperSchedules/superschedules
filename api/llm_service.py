@@ -38,8 +38,8 @@ class ChatComparisonResult:
 class OllamaService:
     """Service for interacting with Ollama LLM models."""
     
-    # Default models for A/B testing - 8B vs 3B comparison
-    DEFAULT_MODEL_A = "llama3.1:8b"
+    # Default models for A/B testing - DeepSeek vs Llama comparison  
+    DEFAULT_MODEL_A = "deepseek-llm:7b"
     DEFAULT_MODEL_B = "llama3.2:3b"
     
     def __init__(self):
@@ -219,40 +219,27 @@ class OllamaService:
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat."""
     
-    system_prompt = """You are an expert local events concierge helping families and individuals discover perfect activities.
+    system_prompt = """You are a local events assistant. ONLY use events from the provided list. DO NOT invent events.
 
-Your expertise:
-- Match events to specific age groups, interests, and constraints
-- Understand timing nuances (weekday vs weekend, seasonal preferences)
-- Provide context about why events are good matches
-- Suggest alternatives when exact matches aren't available
+STRICT RULES:
+1. ONLY recommend events from the "Available upcoming events" section
+2. DO NOT make up events, dates, or locations  
+3. Keep responses SHORT - maximum 3 sentences
 
-Response format (follow this example structure):
-"Here's what we found:
-
-• **Event Title** at Location on Date/Time - Brief explanation of why it fits their needs [URL if available]
-• **Another Event** at Location on Date/Time - Another brief explanation [URL if available]
-
-A few thoughts: Explain why these are good matches, address any constraints they mentioned, and suggest alternatives if needed.
-
-What specific aspects are most important to you - timing, location, or activities?"
-
-Always:
-- Start with "Here's what we found:" or similar greeting
-- Use bullet points (•) for event recommendations
-- Include event URLs when available in [square brackets]
-- End with brief thoughts and a clarifying question
-- Keep explanations concise but helpful
+FORMAT:
+- If events exist: "Here are the upcoming events I found:" + bullet points
+- If no events: "I don't see any upcoming events that match what you're looking for. You might want to check local libraries or community centers."
+- Use bullet points: • **Event Title** on Date at Location [URL]
 """
 
     user_prompt = f"""User message: "{message}"
 
-Context:
-- Current date: {context.get('current_date', 'unknown')}
-- Location preference: {context.get('location', 'not specified')}
-- User preferences: {context.get('preferences', {})}
+Current date/time: {context.get('current_date', 'unknown')}
+Location preference: {context.get('location', 'not specified')}
 
-Available events that might be relevant:
+IMPORTANT: Only recommend events that are in the future. Do not recommend events that have already happened.
+
+Available upcoming events:
 """
 
     if events:
@@ -293,14 +280,11 @@ Available events that might be relevant:
                 
             user_prompt += "\n"
     else:
-        user_prompt += "\n(No specific events found in database - suggest general alternatives or ask for more details)"
+        user_prompt += "\n(No matching upcoming events found in database)"
 
     user_prompt += """
-Please provide helpful, specific recommendations using the bullet-point format. Include:
-1. Start with \"Here's what we found:\" or similar greeting
-2. Use bullet points (•) for the most relevant events with URLs when available
-3. Brief explanations of WHY each event fits their needs
-4. End with \"A few thoughts:\" section and a follow-up question"""
+
+IMPORTANT: Only use the events listed above. Do not invent any events. If the list is empty, say there are no events and suggest general alternatives like libraries or community centers."""
 
     return system_prompt, user_prompt
 
