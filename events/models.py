@@ -27,6 +27,7 @@ class Source(models.Model):
         null=True,
         blank=True,
     )
+    
     name = models.CharField(max_length=100, blank=True, null=True)
     base_url = models.URLField(blank=True)
     site_strategy = models.ForeignKey(
@@ -145,8 +146,7 @@ class Event(models.Model):
     class Meta:
         unique_together = ('source', 'external_id')
         indexes = [
-            GinIndex(fields=['description'], name='desc_gin_idx'),
-            GinIndex(fields=['embedding'], name='embed_gin_idx'),
+            GinIndex(fields=['description'], name='desc_gin_idx', opclasses=['gin_trgm_ops']),
         ]
 
     def __str__(self):
