@@ -7,6 +7,9 @@ from django.contrib.postgres.indexes import GinIndex
 import secrets
 import logging
 
+# Import Place model for Schema.org location support
+from .place_models import Place
+
 logger = logging.getLogger(__name__)
 
 class Source(models.Model):
@@ -128,7 +131,37 @@ class Event(models.Model):
     external_id = models.CharField(max_length=255)
     title = models.CharField(max_length=255)
     description = models.TextField()
-    location = models.CharField(max_length=255)
+    
+    # Enhanced location fields with Schema.org Place support
+    place = models.ForeignKey(
+        Place, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        help_text="Rich Schema.org Place object with full venue details"
+    )
+    location = models.CharField(
+        max_length=255,
+        help_text="Fallback location string for backward compatibility"
+    )
+    
+    # Additional Schema.org Event fields
+    organizer = models.CharField(
+        max_length=200, 
+        blank=True,
+        help_text="Event organizer name from Schema.org"
+    )
+    event_status = models.CharField(
+        max_length=50, 
+        blank=True,
+        help_text="scheduled/cancelled/postponed from Schema.org"
+    )
+    event_attendance_mode = models.CharField(
+        max_length=50, 
+        blank=True,
+        help_text="offline/online/mixed from Schema.org"
+    )
+    
     start_time = models.DateTimeField()
     end_time = models.DateTimeField(null=True, blank=True)
     url = models.URLField(blank=True, null=True)
@@ -142,6 +175,93 @@ class Event(models.Model):
     embedding = VectorField(dimensions=384, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    def get_location_string(self) -> str:
+        """Get location as string for backward compatibility."""
+        try:
+            if self.place:
+                return str(self.place)
+        except:
+            # Fallback for events without place relationship
+            pass
+        return self.location or ""
+    
+    def get_full_address(self) -> str:
+        """Get full address for geocoding and location searches."""
+        try:
+            if self.place and self.place.address:
+                return self.place.address
+        except:
+            # Fallback for events without place relationship
+            pass
+        return ""
+    
+    def get_city(self) -> str:
+        """Extract city from location for geographic searches."""
+        try:
+            if self.place:
+                return self.place.get_city()
+        except:
+            # Fallback for events without place relationship
+            pass
+        return ""
+    
+    def get_location_search_text(self) -> str:
+        """Get comprehensive location text for RAG search."""
+        try:
+            if self.place:
+                return self.place.get_search_text()
+        except:
+            # Fallback for events without place relationship
+            pass
+        return self.location or ""
+    
+    @classmethod
+    def create_with_schema_org_data(cls, event_data: dict, source):
+        """
+        Create Event with rich Schema.org data including Place objects.
+        
+        Args:
+            event_data: Event data from collector with potential Schema.org location
+            source: Source instance
+            
+        Returns:
+            Event instance
+        """
+        # Extract location data and create Place if it's Schema.org format
+        location_data = event_data.get('location')
+        place_obj = None
+        location_text = ""
+        
+        if isinstance(location_data, dict) and (location_data.get('type') == 'Place' or location_data.get('@type') == 'Place'):
+            # Create Place from Schema.org data
+            place_obj = Place.create_from_schema_org(location_data)
+            location_text = str(place_obj) if place_obj else ""
+        elif isinstance(location_data, list):
+            # Handle array of Place objects
+            if location_data and isinstance(location_data[0], dict):
+                place_obj = Place.create_from_schema_org(location_data[0])
+                location_text = str(place_obj) if place_obj else ""
+        else:
+            # Simple string location
+            location_text = str(location_data) if location_data else ""
+        
+        # Create event with place reference
+        return cls.objects.create(
+            source=source,
+            external_id=event_data.get('external_id', ''),
+            title=event_data.get('title', ''),
+            description=event_data.get('description', ''),
+            place=place_obj,
+            location=location_text,
+            organizer=event_data.get('organizer', ''),
+            event_status=event_data.get('event_status', ''),
+            event_attendance_mode=event_data.get('event_attendance_mode', ''),
+            start_time=event_data.get('start_time'),
+            end_time=event_data.get('end_time'),
+            url=event_data.get('url', ''),
+            metadata_tags=event_data.get('tags', [])
+        )
 
     class Meta:
         unique_together = ('source', 'external_id')

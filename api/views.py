@@ -81,11 +81,15 @@ class EventCreateSchema(Schema):
     external_id: str
     title: str
     description: str
-    location: str
+    location: str | dict  # Support both string and Schema.org Place object
     start_time: datetime
     end_time: datetime | None = None
     url: str | None = None
     metadata_tags: List[str] | None = None
+    # Schema.org fields
+    organizer: str | None = None
+    event_status: str | None = None
+    event_attendance_mode: str | None = None
 
 
 class EventUpdateSchema(Schema):
@@ -346,17 +350,19 @@ def create_event(request, payload: EventCreateSchema):
             source.site_strategy = strategy
             source.save(update_fields=["site_strategy"])
 
-    event = Event.objects.create(
-        source=source,
-        external_id=payload.external_id,
-        title=payload.title,
-        description=payload.description,
-        location=payload.location,
-        start_time=payload.start_time,
-        end_time=payload.end_time,
-        url=payload.url,
-        metadata_tags=payload.metadata_tags or [],
-    )
+    event = Event.create_with_schema_org_data({
+        'external_id': payload.external_id,
+        'title': payload.title,
+        'description': payload.description,
+        'location': payload.location,  # Can be string or Schema.org Place
+        'start_time': payload.start_time,
+        'end_time': payload.end_time,
+        'url': payload.url,
+        'tags': payload.metadata_tags or [],
+        'organizer': payload.organizer or '',
+        'event_status': payload.event_status or '',
+        'event_attendance_mode': payload.event_attendance_mode or '',
+    }, source)
     return 201, event
 
 
@@ -841,7 +847,7 @@ def _trigger_collection(source):
                     "additional_hints": {}
                 }
             },
-            timeout=60  # Allow time for scraping
+            timeout=180  # Allow time for iframe + calendar pagination
         )
         
         if response.status_code == 200:
@@ -857,18 +863,20 @@ def _trigger_collection(source):
                         if event_data.get('end_time'):
                             end_time = datetime.fromisoformat(event_data['end_time'].replace('Z', '+00:00'))
                         
-                        # Create event
-                        Event.objects.create(
-                            source=source,
-                            external_id=event_data['external_id'],
-                            title=event_data['title'],
-                            description=event_data['description'],
-                            location=event_data['location'],
-                            start_time=start_time,
-                            end_time=end_time,
-                            url=event_data.get('url'),
-                            metadata_tags=event_data.get('tags', []),
-                        )
+                        # Create event using Schema.org-aware method
+                        Event.create_with_schema_org_data({
+                            'external_id': event_data['external_id'],
+                            'title': event_data['title'],
+                            'description': event_data['description'],
+                            'location': event_data['location'],  # This can be Schema.org Place object
+                            'start_time': start_time,
+                            'end_time': end_time,
+                            'url': event_data.get('url'),
+                            'tags': event_data.get('tags', []),
+                            'organizer': event_data.get('organizer', ''),
+                            'event_status': event_data.get('event_status', ''),
+                            'event_attendance_mode': event_data.get('event_attendance_mode', ''),
+                        }, source)
                         created_count += 1
                     except Exception as e:
                         print(f"Failed to create event: {e}")

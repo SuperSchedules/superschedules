@@ -293,7 +293,7 @@ async def get_relevant_events(message: str) -> List[Dict]:
             return rag_service.get_context_events(
                 user_message=message,
                 max_events=8,
-                similarity_threshold=0.3,  # Higher threshold for more relevant results
+                similarity_threshold=0.1,  # Higher threshold for more relevant results
                 time_filter_days=14  # Only show events in next 2 weeks
             )
         

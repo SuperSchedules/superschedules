@@ -58,9 +58,9 @@ class EventRAGService:
     def _create_event_text(self, event: Event) -> str:
         """Create searchable text representation of an event."""
         parts = [
-            event.title,
-            event.description or "",
-            event.location or "",
+            clean_html_content(event.title),
+            clean_html_content(event.description or ""),
+            clean_html_content(event.get_location_search_text()),  # Use rich location data
         ]
         
         # Add temporal context
@@ -151,16 +151,58 @@ class EventRAGService:
         if location_filter:
             queryset = queryset.filter(location__icontains=location_filter)
         
-        # Perform vector similarity search using PostgreSQL
-        results = (
-            queryset
-            .annotate(distance=CosineDistance('embedding', query_embedding.tolist()))
-            .order_by('distance')[:top_k]
-        )
+        # Perform vector similarity search using raw SQL (Django ORM CosineDistance has issues)
+        from django.db import connection
         
-        # Convert distance to similarity score (1 - distance)
+        # Build WHERE conditions for the filters
+        where_conditions = ["embedding IS NOT NULL"]
+        params = []
+        
+        if only_future_events:
+            where_conditions.append("start_time > %s")
+            params.append(timezone.now())
+            
+        if time_filter_days and time_filter_days > 0:
+            end_date = timezone.now() + timedelta(days=time_filter_days)
+            where_conditions.append("start_time <= %s")
+            params.append(end_date)
+            
+        if location_filter:
+            where_conditions.append("location ILIKE %s")
+            params.append(f"%{location_filter}%")
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        # Separate filter params from embedding/limit params  
+        filter_params = params.copy()
+        query_embedding_list = query_embedding.tolist()
+        
+        with connection.cursor() as cursor:
+            # Build the complete SQL with correct parameter order
+            sql = f'''
+                SELECT id, 1 - (embedding <=> %s::vector) as similarity
+                FROM events_event 
+                WHERE {where_clause}
+                ORDER BY similarity DESC 
+                LIMIT %s
+            '''
+            # Parameters: [query_embedding, filter_params..., top_k]
+            all_params = [query_embedding_list] + filter_params + [top_k]
+            cursor.execute(sql, all_params)
+            
+            sql_results = cursor.fetchall()
+        
+        # Convert SQL results back to Event objects with similarity scores
+        event_ids = [row[0] for row in sql_results]
+        similarity_scores = {row[0]: row[1] for row in sql_results}
+        
+        # Get Event objects in the same order
+        events = Event.objects.filter(id__in=event_ids)
+        event_dict = {event.id: event for event in events}
+        
         event_similarity_pairs = [
-            (event, 1.0 - event.distance) for event in results
+            (event_dict[event_id], similarity_scores[event_id]) 
+            for event_id in event_ids if event_id in event_dict
         ]
         
         logger.info(f"Found {len(event_similarity_pairs)} semantic matches for query: '{query}'")
@@ -207,7 +249,11 @@ class EventRAGService:
                         'id': event.id,
                         'title': clean_html_content(event.title),
                         'description': clean_html_content(event.description),
-                        'location': clean_html_content(event.location),
+                        'location': clean_html_content(event.get_location_string()),  # Display location
+                        'full_address': event.get_full_address(),  # Rich address data
+                        'city': event.get_city(),  # Extracted city
+                        'organizer': event.organizer,  # Schema.org organizer
+                        'event_status': event.event_status,  # Schema.org event status
                         'start_time': event.start_time.isoformat() if event.start_time else None,
                         'end_time': event.end_time.isoformat() if event.end_time else None,
                         'url': event.url,
@@ -255,7 +301,11 @@ class EventRAGService:
                 'id': event.id,
                 'title': clean_html_content(event.title),
                 'description': clean_html_content(event.description),
-                'location': clean_html_content(event.location),
+                'location': clean_html_content(event.get_location_string()),
+                'full_address': event.get_full_address(),
+                'city': event.get_city(),
+                'organizer': event.organizer,
+                'event_status': event.event_status,
                 'start_time': event.start_time.isoformat() if event.start_time else None,
                 'end_time': event.end_time.isoformat() if event.end_time else None,
                 'url': event.url,
