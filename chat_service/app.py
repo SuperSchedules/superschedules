@@ -30,7 +30,7 @@ from . import debug_routes
 
 app = FastAPI(
     title="Superschedules Chat Service",
-    description="Streaming chat API with A/B testing for LLM responses",
+    description="Streaming chat API LLM responses",
     version="1.0.0"
 )
 
