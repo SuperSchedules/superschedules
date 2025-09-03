@@ -22,7 +22,9 @@ Write functions using easily testable subfunctions:
 - Each function should have a single responsibility
 - Minimize dependencies and side effects
 - Use dependency injection for external services
-
+- keep returns human readable where possible, and try to make debugging easier by not having complicated logic on a return statement.
+- avoid comments that are just repeating the function name.
+- 
 Example:
 ```python
 # Good: Testable subfunctions
@@ -47,9 +49,9 @@ def create_event(event_data: dict, api_client: ApiClient) -> Event:
 - **Backend**: Django 5.0 with Django Ninja API framework
 - **Chat Service**: FastAPI with Server-Sent Events (SSE) streaming  
 - **Database**: PostgreSQL with pgvector extension
-- **LLM**: Ollama (llama3.1:8b & llama3.2:3b for A/B testing)
+- **LLM**: Ollama
 - **RAG**: sentence-transformers (all-MiniLM-L6-v2) + vector similarity
-- **Testing**: pytest with model-bakery fixtures
+- **Testing**: django tests with manage.py test or pytest for fast api
 - **Auth**: JWT tokens via ninja-jwt
 
 ## Services
@@ -66,7 +68,6 @@ def create_event(event_data: dict, api_client: ApiClient) -> Event:
 
 ### FastAPI Chat Service
 - Real-time streaming chat with SSE
-- A/B testing between Ollama models
 - RAG integration for contextual responses
 - CORS enabled for frontend integration
 
