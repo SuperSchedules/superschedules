@@ -29,9 +29,12 @@ def main():
         "port": 8002,
         "loop": "asyncio",
         "http": "h11",
-        "log_level": "info",
+        "log_level": "debug",
         "access_log": False,
+        "reload": True,
         "timeout_keep_alive": 75,
+        "reload_dirs": ["chat_service", "api"],
+        "reload_delay": 1.0,
     }
     
     if reload_enabled:
