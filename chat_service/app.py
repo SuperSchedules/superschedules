@@ -20,8 +20,9 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from ninja_jwt.tokens import UntypedToken
+from ninja_jwt.tokens import AccessToken
 from ninja_jwt.exceptions import InvalidToken, TokenError
+from django.contrib.auth.models import User
 
 from events.models import Event
 from api.llm_service import get_llm_service, create_event_discovery_prompt
@@ -65,18 +66,86 @@ class StreamChunk(BaseModel):
     response_time_ms: int | None = None
 
 
-async def verify_jwt_token(request: Request):
-    """Verify JWT token from Authorization header"""
+class JWTClaims(BaseModel):
+    """JWT claims for downstream authorization"""
+    model_config = {"arbitrary_types_allowed": True}
+    
+    user_id: int
+    username: str
+    exp: int
+    iat: int
+    token_type: str
+    user: User | None = None  # Optional user object for authorization
+
+
+async def verify_jwt_token(request: Request) -> JWTClaims:
+    """
+    Verify JWT AccessToken from Authorization header.
+    
+    Enforces:
+    - Token signature validation  
+    - Token type (access token only)
+    - Expiration (exp) and not-before (nbf) claims (handled by AccessToken)
+    - Optional audience (aud) and issuer (iss) validation if configured
+    - Returns parsed claims for downstream authorization
+    """
+    from django.conf import settings
+    
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
     
-    token = auth_header.split("Bearer ")[1]
+    token_str = auth_header.split("Bearer ")[1]
     try:
-        UntypedToken(token)
-        return token
+        # Use AccessToken for proper validation (enforces exp/nbf/token_type automatically)
+        access_token = AccessToken(token_str)
+        
+        # Extract validated claims
+        claims = access_token.payload
+        
+        # Verify this is specifically an access token
+        if claims.get('token_type') != 'access':
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        
+        # Optional: Validate audience (aud) if configured
+        expected_audience = getattr(settings, 'JWT_EXPECTED_AUDIENCE', None)
+        if expected_audience:
+            token_audience = claims.get('aud')
+            if not token_audience or expected_audience not in (
+                token_audience if isinstance(token_audience, list) else [token_audience]
+            ):
+                raise HTTPException(status_code=401, detail="Invalid token audience")
+        
+        # Optional: Validate issuer (iss) if configured
+        expected_issuer = getattr(settings, 'JWT_EXPECTED_ISSUER', None)
+        if expected_issuer:
+            token_issuer = claims.get('iss')
+            if token_issuer != expected_issuer:
+                raise HTTPException(status_code=401, detail="Invalid token issuer")
+        
+        # Get user for authorization (optional, depending on needs)
+        user = None
+        try:
+            from asgiref.sync import sync_to_async
+            user = await sync_to_async(User.objects.get)(id=claims['user_id'])
+        except User.DoesNotExist:
+            # Log warning but don't fail - user might have been deleted
+            import logging
+            logging.warning(f"User {claims['user_id']} not found for valid JWT token")
+        
+        return JWTClaims(
+            user_id=claims['user_id'],
+            username=claims.get('username', ''),
+            exp=claims['exp'],
+            iat=claims['iat'],
+            token_type=claims['token_type'],
+            user=user
+        )
+        
     except (InvalidToken, TokenError) as e:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    except KeyError as e:
+        raise HTTPException(status_code=401, detail=f"Missing required claim: {str(e)}")
 
 
 @app.get("/health")
@@ -88,7 +157,7 @@ async def health_check():
 @app.post("/chat/stream")
 async def stream_chat(
     request: ChatRequest,
-    token: str = Depends(verify_jwt_token)
+    jwt_claims: JWTClaims = Depends(verify_jwt_token)
 ):
     """
     Stream dual LLM responses for A/B testing.
