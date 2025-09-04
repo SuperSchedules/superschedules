@@ -179,12 +179,15 @@ class TestSemanticSearch(RAGServiceTest):
         self.mock_model = MagicMock()
         self.rag_service.model = self.mock_model
         
-        # Create mock embeddings for test events
+        # Create mock embeddings for test events with correct 384 dimensions
+        import numpy as np
+        np.random.seed(42)  # For reproducible test embeddings
+        
         self.mock_embeddings = {
-            self.baby_storytime.id: [0.1, 0.2, 0.3],  # Mock baby-related embedding
-            self.dance_class.id: [0.4, 0.5, 0.6],     # Mock dance-related embedding  
-            self.teen_space.id: [0.7, 0.8, 0.9],      # Mock teen-related embedding
-            self.virtual_event.id: [0.2, 0.3, 0.4]    # Mock virtual-related embedding
+            self.baby_storytime.id: np.random.rand(384).tolist(),  # Mock baby-related embedding
+            self.dance_class.id: np.random.rand(384).tolist(),     # Mock dance-related embedding  
+            self.teen_space.id: np.random.rand(384).tolist(),      # Mock teen-related embedding
+            self.virtual_event.id: np.random.rand(384).tolist()    # Mock virtual-related embedding
         }
         
         # Set embeddings on events
@@ -195,7 +198,9 @@ class TestSemanticSearch(RAGServiceTest):
     def test_semantic_search_filters_future_events(self):
         """Test that semantic search only returns future events by default."""
         # Mock query embedding
-        self.mock_model.encode.return_value = [[0.1, 0.2, 0.3]]
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
         
         results = self.rag_service.semantic_search("test query", only_future_events=True)
         
@@ -214,7 +219,9 @@ class TestSemanticSearch(RAGServiceTest):
     def test_semantic_search_respects_time_filter(self):
         """Test time window filtering works correctly."""
         # Mock query embedding
-        self.mock_model.encode.return_value = [[0.1, 0.2, 0.3]]
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
         
         # Search with 1-day window (should only get events tomorrow)
         results = self.rag_service.semantic_search("test query", time_filter_days=1)
@@ -230,7 +237,9 @@ class TestSemanticSearch(RAGServiceTest):
     def test_semantic_search_location_filter(self):
         """Test location-based filtering."""
         # Mock query embedding
-        self.mock_model.encode.return_value = [[0.1, 0.2, 0.3]]
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
         
         # Search for Library Community Room events
         results = self.rag_service.semantic_search("test query", location_filter="Library Community Room")
@@ -242,7 +251,9 @@ class TestSemanticSearch(RAGServiceTest):
     def test_get_context_events_applies_similarity_threshold(self):
         """Test that context events filtering by similarity threshold works."""
         # Mock query embedding and set specific similarity scores
-        self.mock_model.encode.return_value = [[0.1, 0.2, 0.3]]
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
         
         # Mock semantic_search to return events with known scores
         with patch.object(self.rag_service, 'semantic_search') as mock_search:
@@ -486,8 +497,13 @@ class TestEmbeddingManagement(RAGServiceTest):
         
     def test_update_event_embeddings_creates_embeddings(self):
         """Test that update_event_embeddings creates embeddings for events."""
-        # Mock embeddings output
-        mock_embeddings = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        import numpy as np
+        
+        # Mock embeddings output as numpy arrays with correct 384 dimensions 
+        # (matches sentence-transformers all-MiniLM-L6-v2 model dimensions)
+        mock_embedding_1 = np.random.rand(384).astype(np.float32)
+        mock_embedding_2 = np.random.rand(384).astype(np.float32) 
+        mock_embeddings = np.array([mock_embedding_1, mock_embedding_2])
         self.mock_model.encode.return_value = mock_embeddings
         
         # Update embeddings for specific events
@@ -498,11 +514,15 @@ class TestEmbeddingManagement(RAGServiceTest):
         updated_events = Event.objects.filter(id__in=event_ids)
         for event in updated_events:
             self.assertIsNotNone(event.embedding)
-            self.assertEqual(len(event.embedding), 3)  # Mock embedding dimension
+            self.assertEqual(len(event.embedding), 384)  # sentence-transformers all-MiniLM-L6-v2 dimension
     
     def test_update_event_embeddings_uses_vectorized_text(self):
         """Test that embeddings are created from the proper vectorized text."""
-        mock_embeddings = [[0.1, 0.2, 0.3]]
+        import numpy as np
+        
+        # Use proper 384-dimension numpy array
+        mock_embedding = np.random.rand(384).astype(np.float32)
+        mock_embeddings = np.array([mock_embedding])
         self.mock_model.encode.return_value = mock_embeddings
         
         self.rag_service.update_event_embeddings([self.baby_storytime.id])

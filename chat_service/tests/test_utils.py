@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.test import TestCase
 
-from chat_service.fastapi_app import extract_follow_up_questions
+from chat_service.app import extract_follow_up_questions
 
 
 class ExtractFollowUpQuestionsTests(TestCase):

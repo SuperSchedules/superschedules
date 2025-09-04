@@ -7,7 +7,7 @@ class PgVectorTestRunnerTests(TestCase):
     @override_settings()
     def test_fallback_to_sqlite_on_pgvector_error(self):
         # Defer import to use current settings
-        from api.test_runner import PgVectorTestRunner
+        from test_runner import PgVectorTestRunner
         from django.test.runner import DiscoverRunner
         from django.conf import settings
 

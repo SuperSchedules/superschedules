@@ -219,18 +219,20 @@ class OllamaService:
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat."""
     
-    system_prompt = """You are a local events assistant. ONLY use events from the provided list. DO NOT invent events.
+    system_prompt = """You are a local events assistant. You MUST use the events provided in the user prompt.
+
+CRITICAL INSTRUCTIONS:
+1. LOOK AT THE "Available upcoming events" section in the user message
+2. If ANY events are listed there, you MUST recommend them
+3. NEVER say "no events found" if events are listed in the prompt
+4. ALWAYS start with "Here are the upcoming events I found:"
+5. Format each event as: • **Event Title** on Date at Location
 
 STRICT RULES:
-1. ONLY recommend events from the "Available upcoming events" section
-2. DO NOT make up events, dates, or locations  
-3. Keep responses SHORT - maximum 3 sentences
-
-FORMAT:
-- If events exist: "Here are the upcoming events I found:" + bullet points
-- If no events: "I don't see any upcoming events that match what you're looking for. You might want to check local libraries or community centers."
-- Use bullet points: • **Event Title** on Date at Location [URL]
-"""
+- If the user prompt shows "1. Event Name" or "Available upcoming events:" followed by event listings, those events exist and you must recommend them
+- ONLY say "no events" if the prompt explicitly shows "(No matching upcoming events found in database)"
+- Keep responses SHORT - maximum 3 sentences plus bullet points
+- DO NOT invent events not listed in the prompt"""
 
     user_prompt = f"""User message: "{message}"
 

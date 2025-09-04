@@ -28,9 +28,12 @@ Superschedules is a Django-based backend for event discovery and management, wit
 - JWT: `POST /api/v1/token/`, `POST /api/v1/token/refresh/`
 
 ## Running Tests
-- All tests: `python manage.py test`
-- Targeted: `python manage.py test api` or `python manage.py test events`
-Note: tests use a custom pgvector-aware runner and fall back to SQLite if pgvector isn’t available.
+```bash
+source .venv/bin/activate
+python manage.py test --settings=config.test_settings
+```
+
+Uses custom test runner with pgvector support and SQLite fallback.
 
 ## Project Structure
 - `config/`: Django project config (`settings.py`, `urls.py`)

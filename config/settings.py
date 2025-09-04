@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'ninja',
     'events',
+    'api',
 ]
 
 MIDDLEWARE = [
@@ -145,7 +146,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 # Custom test runner for pgvector support
-TEST_RUNNER = 'api.test_runner.PgVectorTestRunner'
+TEST_RUNNER = 'test_runner.PgVectorTestRunner'
 
 # Email configuration for password reset
 EMAIL_BACKEND = os.environ.get(
@@ -160,3 +161,7 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@example.com"
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", 3600))
+
+# LLM Configuration
+LLM_PRIMARY_MODEL = os.environ.get("LLM_PRIMARY_MODEL", "deepseek-llm:7b")
+LLM_BACKUP_MODEL = os.environ.get("LLM_BACKUP_MODEL", "llama3.2:3b")

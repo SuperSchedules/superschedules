@@ -806,15 +806,15 @@ def _parse_ages_from_message(message: str) -> List[int] | None:
 
 def _parse_location_from_message(message: str, context: ChatContextSchema) -> str | None:
     """Extract location from message or context."""
-    location_match = re.search(r'(?:in|at|near)\s+([a-zA-Z\s,]+?)(?:\s|$|,)', message.lower())
+    location_match = re.search(r'(?:in|at|near)\s+([a-zA-Z\s,]+?)(?:\s*[^\w\s]|\s*$)', message.lower())
     if location_match:
-        return location_match.group(1).strip()
+        return location_match.group(1).strip(' ,')
     return context.location
 
 
 def _parse_timeframe_from_message(message: str) -> str:
     """Extract timeframe from message."""
-    time_match = re.search(r'(today|tomorrow|this\s+(?:week|weekend|month)|next\s+(?:\d+\s+)?(?:hours?|days?|week|month))', message.lower())
+    time_match = re.search(r'(today|tomorrow|this\s+(?:weekend|week|month)|next\s+(?:\d+\s+)?(?:hours?|days?|week|month))', message.lower())
     return time_match.group(1) if time_match else 'upcoming'
 
 

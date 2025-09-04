@@ -25,8 +25,8 @@ class FastAPIServiceTests(TestCase):
         assert data["status"] == "healthy"
         assert data["service"] == "chat_service"
 
-    @patch("chat_service.fastapi_app.get_relevant_events", new_callable=AsyncMock)
-    @patch("chat_service.fastapi_app.get_llm_service")
+    @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
+    @patch("chat_service.app.get_llm_service")
     def test_stream_chat_single_model(self, mock_get_llm, mock_get_events):
         # Relevant events for context (minimal)
         mock_get_events.return_value = [
@@ -52,10 +52,10 @@ class FastAPIServiceTests(TestCase):
             for line in resp.iter_lines():
                 if not line:
                     continue
-                if line.startswith(b"data: "):
-                    chunks.append(line[len(b"data: "):])
+                if line.startswith("data: "):
+                    chunks.append(line[len("data: "):])
 
         # Expect model B tokens (single model mode uses B) and a final SYSTEM marker
-        assert any(b'"model": "B"' in c and b'"done": false' in c for c in chunks)
-        assert any(b'"model": "B"' in c and b'"done": true' in c for c in chunks)
-        assert any(b'"model": "SYSTEM"' in c and b'"done": true' in c for c in chunks)
+        assert any('"model": "B"' in c and '"done": false' in c for c in chunks)
+        assert any('"model": "B"' in c and '"done": true' in c for c in chunks)
+        assert any('"model": "SYSTEM"' in c and '"done": true' in c for c in chunks)

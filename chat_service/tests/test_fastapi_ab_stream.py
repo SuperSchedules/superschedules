@@ -21,8 +21,8 @@ class FastAPIDualStreamTests(TestCase):
         self.jwt = str(refresh.access_token)
         self.client = TestClient(app)
 
-    @patch("chat_service.fastapi_app.get_relevant_events", new_callable=AsyncMock)
-    @patch("chat_service.fastapi_app.get_llm_service")
+    @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
+    @patch("chat_service.app.get_llm_service")
     def test_stream_chat_dual_models(self, mock_get_llm, mock_get_events):
         mock_get_events.return_value = [
             {"id": 1, "title": "E1", "description": "d", "location": "l", "start_time": None, "end_time": None}
@@ -59,12 +59,12 @@ class FastAPIDualStreamTests(TestCase):
             for line in resp.iter_lines():
                 if not line:
                     continue
-                if line.startswith(b"data: "):
-                    chunks.append(line[len(b"data: "):])
+                if line.startswith("data: "):
+                    chunks.append(line[len("data: "):])
 
         # Expect both A and B streams and a final SYSTEM marker
-        assert any(b'"model": "A"' in c and b'"done": false' in c for c in chunks)
-        assert any(b'"model": "A"' in c and b'"done": true' in c for c in chunks)
-        assert any(b'"model": "B"' in c and b'"done": false' in c for c in chunks)
-        assert any(b'"model": "B"' in c and b'"done": true' in c for c in chunks)
-        assert any(b'"model": "SYSTEM"' in c and b'"done": true' in c for c in chunks)
+        assert any('"model": "A"' in c and '"done": false' in c for c in chunks)
+        assert any('"model": "A"' in c and '"done": true' in c for c in chunks)
+        assert any('"model": "B"' in c and '"done": false' in c for c in chunks)
+        assert any('"model": "B"' in c and '"done": true' in c for c in chunks)
+        assert any('"model": "SYSTEM"' in c and '"done": true' in c for c in chunks)
