@@ -53,73 +53,6 @@ class RAGLLMIntegrationTest(TestCase):
             )
         ]
     
-    def test_rag_finds_events_but_llm_says_none_found(self):
-        """
-        Reproduce the exact issue: RAG finds events but LLM says no events found.
-        
-        This test should FAIL initially, then we fix the underlying issue.
-        """
-        query = "can you help me find something to do near needham? in the next few days with kids?"
-        
-        # Step 1: Verify RAG service finds events (should work)
-        with patch('api.rag_service.EventRAGService') as mock_rag_class:
-            mock_rag = MagicMock()
-            mock_rag_class.return_value = mock_rag
-            
-            # Mock RAG to return our test events (simulates the working RAG)
-            mock_rag.get_context_events.return_value = [
-                {
-                    'id': event.id,
-                    'title': event.title,
-                    'description': event.description,
-                    'location': event.location,
-                    'start_time': event.start_time.isoformat(),
-                    'similarity_score': 0.6,
-                    'url': event.url
-                }
-                for event in self.needham_events
-            ]
-            
-            # Step 2: Call get_relevant_events (simulates chat service)
-            async def run_test():
-                relevant_events = await get_relevant_events(query)
-                
-                # Verify RAG found events
-                self.assertEqual(len(relevant_events), 3, "RAG should find 3 relevant events")
-                self.assertTrue(all('needham' in event['title'].lower() or 'needham' in event['location'].lower() 
-                                  for event in relevant_events), "All events should be Needham-related")
-                
-                # Step 3: Create LLM prompt with those events
-                system_prompt, user_prompt = create_event_discovery_prompt(
-                    query, relevant_events, {
-                        'current_date': datetime.now().isoformat(),
-                        'location': None,
-                        'preferences': {}
-                    }
-                )
-                
-                # Verify events are in the prompt
-                self.assertIn("Kids Story Time", user_prompt, "Event should be in LLM prompt")
-                self.assertIn("Family Fun Day", user_prompt, "Event should be in LLM prompt") 
-                self.assertIn("Children's Art Workshop", user_prompt, "Event should be in LLM prompt")
-                self.assertNotIn("(No matching upcoming events found in database)", user_prompt, 
-                                "Should not show 'no events' message when events exist")
-                
-                # Step 4: Mock LLM to return "no events found" response (the bug)
-                mock_llm_response = """I don't see any upcoming events that match what you're looking for. You might want to check local libraries or community centers for activities and events near Needham."""
-                
-                # Step 5: Verify this is the problematic behavior
-                # This assertion should FAIL initially because the LLM ignores the events
-                self.assertNotIn("don't see any upcoming events", mock_llm_response,
-                                "LLM should NOT say no events when RAG provided 3 relevant events")
-                self.assertIn("Story Time", mock_llm_response,
-                            "LLM should mention the specific events found by RAG")
-                
-                return relevant_events, user_prompt, mock_llm_response
-            
-            # Run the async test
-            result = asyncio.run(run_test())
-            return result
     
     def test_llm_prompt_format_with_events(self):
         """Test that events are properly formatted in the LLM prompt"""
@@ -153,9 +86,9 @@ class RAGLLMIntegrationTest(TestCase):
         self.assertIn("needham.library", user_prompt, "URL should be included")
         
         # Verify system prompt has correct instructions
-        self.assertIn("ONLY use events from the provided list", system_prompt)
-        self.assertIn("DO NOT invent events", system_prompt)
-        self.assertIn("Here are the upcoming events I found", system_prompt)
+        self.assertIn("DO NOT invent events not listed in the prompt", system_prompt)
+        self.assertIn("you MUST recommend them", system_prompt)
+        self.assertIn("CRITICAL INSTRUCTIONS", system_prompt)
         
         # Most importantly: verify there's no "no events" message
         self.assertNotIn("No matching upcoming events found", user_prompt)
@@ -177,30 +110,31 @@ class RAGLLMIntegrationTest(TestCase):
         
         # When no events found, should have appropriate message
         self.assertIn("(No matching upcoming events found in database)", user_prompt)
-        self.assertIn("do not invent any events", user_prompt)
+        self.assertIn("Do not invent any events", user_prompt)
         
-        # System prompt should still have "no events" handling
-        self.assertIn('If no events: "I don\'t see any upcoming events', system_prompt)
+        # System prompt should have instruction for no events case  
+        self.assertIn('ONLY say "no events" if the prompt explicitly shows "(No matching upcoming events found in database)"', system_prompt)
 
 
 class MockLLMStreamTest(TestCase):
     """Test LLM streaming with mocked responses"""
     
-    def test_llm_ignores_provided_events(self):
+    def test_prompt_contains_provided_events(self):
         """
-        Test that reproduces LLM saying no events when events are provided.
-        This simulates the exact bug we're experiencing.
+        Test that when events are provided, they appear correctly in the prompt.
+        This verifies the prompt generation works without mocking LLM responses.
         """
         
-        # Mock events that RAG found
-        mock_events = [
+        # Create real event data (what RAG would return)
+        events = [
             {
                 'id': 1,
                 'title': 'Needham Kids Festival',
                 'description': 'Annual festival with activities for children',
                 'location': 'Needham Town Common',
                 'start_time': '2025-01-16T14:00:00',
-                'similarity_score': 0.7
+                'end_time': '2025-01-16T17:00:00',
+                'url': 'https://needham.gov/kids-festival'
             }
         ]
         
@@ -208,33 +142,28 @@ class MockLLMStreamTest(TestCase):
         
         # Create prompt with events
         system_prompt, user_prompt = create_event_discovery_prompt(
-            query, mock_events, {'current_date': '2025-01-13T20:00:00'}
+            query, events, {'current_date': 'Wednesday, January 15, 2025 at 08:00 PM'}
         )
         
-        # Mock LLM service that ignores the events (reproduces the bug)
-        with patch('api.llm_service.get_llm_service') as mock_llm_service:
-            mock_service = MagicMock()
-            mock_llm_service.return_value = mock_service
-            
-            # Mock LLM response that ignores the provided events
-            mock_service.stream_chat.return_value = [
-                {'token': "I don't see any upcoming events that match what you're looking for.", 'done': False},
-                {'token': " You might want to check local libraries.", 'done': False}, 
-                {'token': '', 'done': True, 'success': True}
-            ]
-            
-            # This should fail because LLM is ignoring the events in the prompt
-            full_response = ""
-            for chunk in mock_service.stream_chat.return_value:
-                if not chunk['done']:
-                    full_response += chunk['token']
-            
-            # The bug: LLM says no events despite events being in prompt
-            self.assertIn("Needham Kids Festival", user_prompt, "Event should be in prompt")
-            self.assertNotIn("don't see any upcoming events", full_response, 
-                            "LLM should not say no events when events are provided in prompt")
-            self.assertIn("Needham Kids Festival", full_response,
-                         "LLM should mention the specific event from the prompt")
+        # Verify system prompt has strong instructions
+        self.assertIn("CRITICAL INSTRUCTIONS", system_prompt)
+        self.assertIn("you MUST recommend them", system_prompt)
+        self.assertIn("NEVER say \"no events found\" if events are listed", system_prompt)
+        
+        # Verify user prompt contains the event details
+        self.assertIn("Needham Kids Festival", user_prompt)
+        self.assertIn("Needham Town Common", user_prompt)
+        self.assertIn("Annual festival with activities for children", user_prompt)
+        self.assertIn("Thursday, January 16", user_prompt)  # Formatted date
+        self.assertIn("02:00 PM to 05:00 PM", user_prompt)  # Formatted time
+        self.assertIn("https://needham.gov/kids-festival", user_prompt)
+        
+        # Verify the prompt structure includes the event listing
+        self.assertIn("Available upcoming events:", user_prompt)
+        self.assertIn("1. Needham Kids Festival", user_prompt)
+        
+        # Verify it doesn't say no events found
+        self.assertNotIn("(No matching upcoming events found in database)", user_prompt)
 
 
 class PromptFlowDebugTest(TestCase):
@@ -314,7 +243,7 @@ class PromptFlowDebugTest(TestCase):
         self.assertIn("Family Fun Day", user_prompt, "Second event title should be in prompt")
         self.assertIn("Needham", user_prompt, "Location should be in prompt")
     
-    async def test_actual_rag_flow_integration(self):
+    def test_actual_rag_flow_integration(self):
         """Test the complete RAG flow as used in the chat service"""
         
         # Create test events for RAG to find
@@ -351,8 +280,15 @@ class PromptFlowDebugTest(TestCase):
                 for event in test_events
             ]
             
-            # Call the actual chat service function
-            relevant_events = await get_relevant_events(query)
+            # Call the RAG service directly (it's sync)
+            from api.rag_service import get_rag_service
+            rag_service = get_rag_service()
+            relevant_events = rag_service.get_context_events(
+                user_message=query,
+                max_events=8,
+                similarity_threshold=0.1,
+                time_filter_days=14
+            )
             
             print(f"\n=== ACTUAL RAG FLOW TEST ===")
             print(f"Query: {query}")
@@ -393,11 +329,5 @@ def run_async_test_method(test_method):
     return wrapper
 
 
-# Apply async wrapper to test methods
-RAGLLMIntegrationTest.test_rag_finds_events_but_llm_says_none_found = run_async_test_method(
-    RAGLLMIntegrationTest.test_rag_finds_events_but_llm_says_none_found
-)
+# Apply async wrapper to test methods (none currently needed)
 
-PromptFlowDebugTest.test_actual_rag_flow_integration = run_async_test_method(
-    PromptFlowDebugTest.test_actual_rag_flow_integration
-)

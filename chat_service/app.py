@@ -341,10 +341,6 @@ async def stream_model_response(
         yield error_chunk
 
 
-@sync_to_async
-def get_events_from_db():
-    """Sync function to query Django models."""
-    return list(Event.objects.all()[:3])
 
 async def get_relevant_events(message: str) -> List[Dict]:
     """
@@ -372,34 +368,12 @@ async def get_relevant_events(message: str) -> List[Dict]:
             print(f"RAG found {len(context_events)} relevant events")
             return context_events
         else:
-            print("RAG found no relevant events, using fallback")
-            # Fallback to recent events
-            events = await get_events_from_db()
-            return [
-                {
-                    'id': event.id,
-                    'title': event.title,
-                    'description': event.description,
-                    'location': event.location,
-                    'start_time': event.start_time.isoformat() if event.start_time else None,
-                    'end_time': event.end_time.isoformat() if event.end_time else None,
-                }
-                for event in events
-            ]
+            print("RAG found no relevant events")
+            return []
         
     except Exception as e:
         print(f"Error in RAG search: {e}")
-        # Return fallback events
-        return [
-            {
-                'id': 1,
-                'title': 'Sample Event',
-                'description': 'A sample event for testing',
-                'location': 'Test Location',
-                'start_time': datetime.now().isoformat(),
-                'end_time': None,
-            }
-        ]
+        return []
 
 
 def extract_follow_up_questions(response: str) -> List[str]:

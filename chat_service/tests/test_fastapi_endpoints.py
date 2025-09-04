@@ -55,7 +55,7 @@ class FastAPIServiceTests(TestCase):
                 if line.startswith("data: "):
                     chunks.append(line[len("data: "):])
 
-        # Expect model B tokens (single model mode uses B) and a final SYSTEM marker
-        assert any('"model": "B"' in c and '"done": false' in c for c in chunks)
-        assert any('"model": "B"' in c and '"done": true' in c for c in chunks)
+        # Expect model A tokens (single model mode uses primary model A) and a final SYSTEM marker
+        assert any('"model": "A"' in c and '"done": false' in c for c in chunks)
+        assert any('"model": "A"' in c and '"done": true' in c for c in chunks)
         assert any('"model": "SYSTEM"' in c and '"done": true' in c for c in chunks)
