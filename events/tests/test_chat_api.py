@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 
 from events.models import Event, Source
-from api.llm_service import ModelResponse, ChatComparisonResult
+from api.llm_service import ModelResponse
 
 User = get_user_model()
 
@@ -55,19 +55,13 @@ class ChatAPITestCase(TestCase):
         )
 
     class DummyLLMService:
-        async def compare_models(self, *args, **kwargs):
+        async def generate_response(self, model, prompt, system_prompt=None, timeout_seconds=30):
             response = "Here are some activities you might like. Any preferences?"
-            model_response = ModelResponse(
-                model_name="dummy",
+            return ModelResponse(
+                model_name=model,
                 response=response,
                 response_time_ms=10,
                 success=True,
-            )
-            return ChatComparisonResult(
-                query=kwargs.get("prompt", ""),
-                model_a=model_response,
-                model_b=model_response,
-                timestamp=datetime.now(),
             )
 
     @patch('api.views.get_llm_service', return_value=DummyLLMService())

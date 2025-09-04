@@ -26,13 +26,6 @@ class ModelResponse:
     error: Optional[str] = None
 
 
-@dataclass 
-class ChatComparisonResult:
-    """Result from comparing multiple models on the same query."""
-    query: str
-    model_a: ModelResponse
-    model_b: ModelResponse
-    timestamp: datetime
 
 
 class OllamaService:
@@ -171,49 +164,6 @@ class OllamaService:
                 'error': str(e)
             }
     
-    async def compare_models(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        model_a: Optional[str] = None,
-        model_b: Optional[str] = None,
-        timeout_seconds: int = 30
-    ) -> ChatComparisonResult:
-        """Generate responses from two models for A/B testing."""
-        
-        model_a = model_a or self.DEFAULT_MODEL_A
-        model_b = model_b or self.DEFAULT_MODEL_B
-        
-        # Run both models in parallel
-        results = await asyncio.gather(
-            self.generate_response(model_a, prompt, system_prompt, timeout_seconds),
-            self.generate_response(model_b, prompt, system_prompt, timeout_seconds),
-            return_exceptions=True
-        )
-        
-        # Handle any exceptions from gather
-        response_a = results[0] if isinstance(results[0], ModelResponse) else ModelResponse(
-            model_name=model_a,
-            response="",
-            response_time_ms=timeout_seconds * 1000,
-            success=False,
-            error=str(results[0])
-        )
-        
-        response_b = results[1] if isinstance(results[1], ModelResponse) else ModelResponse(
-            model_name=model_b,
-            response="",
-            response_time_ms=timeout_seconds * 1000,
-            success=False,
-            error=str(results[1])
-        )
-        
-        return ChatComparisonResult(
-            query=prompt,
-            model_a=response_a,
-            model_b=response_b,
-            timestamp=datetime.now()
-        )
 
 
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
