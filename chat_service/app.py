@@ -170,6 +170,18 @@ async def stream_chat(
             # Get LLM service
             llm_service = get_llm_service()
             
+            # Quick health check - get available models (with timeout)
+            try:
+                available_models = await asyncio.wait_for(llm_service.get_available_models(), timeout=10)
+                if not available_models:
+                    print("Warning: No models available from Ollama")
+                else:
+                    print(f"Ollama health check OK: {len(available_models)} models available")
+            except asyncio.TimeoutError:
+                print("Warning: Ollama health check timed out")
+            except Exception as e:
+                print(f"Warning: Ollama health check failed: {e}")
+            
             # Get relevant events for context
             relevant_events = await get_relevant_events(request.message)
             
@@ -178,24 +190,34 @@ async def stream_chat(
                 model_name = llm_service.DEFAULT_MODEL_A  # Always use DeepSeek model
                 model_id = "A"  # Always use A for single mode (the DeepSeek model)
                 
-                model_generator = stream_model_response(
+                # Use retry mechanism for better reliability
+                model_generator = stream_model_response_with_retry(
                     llm_service, 
                     request.message, 
                     relevant_events,
                     model_name=model_name,
-                    model_id=model_id
+                    model_id=model_id,
+                    max_retries=1  # One retry for better responsiveness
                 )
                 
                 # Stream from single model
+                chunk_count = 0
                 try:
                     async for chunk in model_generator:
+                        chunk_count += 1
                         yield f"data: {json.dumps(chunk.dict())}\n\n"
+                        
+                        # Log progress periodically
+                        if chunk_count % 50 == 0:
+                            print(f"Streaming progress: {chunk_count} chunks sent for {model_id}")
+                            
                 except Exception as e:
+                    print(f"Stream error after {chunk_count} chunks for {model_id}: {type(e).__name__}: {e}")
                     error_chunk = StreamChunk(
                         model=model_id, 
                         token="", 
                         done=True, 
-                        error=str(e)
+                        error=f"Stream interrupted after {chunk_count} chunks: {str(e)}"
                     )
                     yield f"data: {json.dumps(error_chunk.dict())}\n\n"
                 
@@ -374,6 +396,60 @@ async def get_relevant_events(message: str) -> List[Dict]:
     except Exception as e:
         print(f"Error in RAG search: {e}")
         return []
+
+
+async def stream_model_response_with_retry(
+    llm_service, 
+    message: str, 
+    context_events: List[Dict],
+    model_name: str | None = None,
+    model_id: str = "A",
+    max_retries: int = 2
+):
+    """
+    Stream response with retry logic for better reliability.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            chunks_received = 0
+            stream_completed = False
+            
+            # Use original streaming function
+            async for chunk in stream_model_response(
+                llm_service, message, context_events, model_name, model_id
+            ):
+                chunks_received += 1
+                yield chunk
+                
+                # Check if this was a completion chunk
+                if hasattr(chunk, 'done') and chunk.done:
+                    stream_completed = True
+                elif isinstance(chunk, dict) and chunk.get('done'):
+                    stream_completed = True
+                    
+            # If we get here and stream completed successfully, we're done
+            if stream_completed:
+                return
+            else:
+                # Stream ended without completion - might be an issue
+                raise Exception(f"Stream ended unexpectedly after {chunks_received} chunks")
+                
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"Stream attempt {attempt + 1} failed for {model_id}: {e}")
+                print(f"Retrying in 2 seconds... ({attempt + 1}/{max_retries})")
+                await asyncio.sleep(2)
+                continue
+            else:
+                # Final attempt failed, yield error
+                print(f"All {max_retries + 1} stream attempts failed for {model_id}: {e}")
+                yield StreamChunk(
+                    model=model_id,
+                    token="",
+                    done=True,
+                    error=f"Stream failed after {max_retries + 1} attempts: {str(e)}"
+                )
+                return
 
 
 def extract_follow_up_questions(response: str) -> List[str]:
