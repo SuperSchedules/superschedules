@@ -4,7 +4,7 @@
 Superschedules is a Django-based backend for event discovery and management, with an optional FastAPI chat service for streaming LLM-powered assistance.
 
 ## Prerequisites
-- Python 3.11+, PostgreSQL 15+ (pgvector recommended), pip
+- Python 3.11+, PostgreSQL 15+ (pgvector required), pip
 
 ## Quickstart
 - Create/activate env: `python -m venv .venv --prompt "schedules_dev" && source .venv/bin/activate`
@@ -16,11 +16,11 @@ Superschedules is a Django-based backend for event discovery and management, wit
 - Migrations: `python manage.py migrate`
 - Create admin: `python manage.py createsuperuser`
 - Run API: `python manage.py runserver 8000`
-- Run Chat (optional): `python scripts/start_chat_service.py` (FastAPI on 8002)
+- Run Chat: `python scripts/start_chat_service.py` (FastAPI on 8002)
 
 ## Services & Ports
 - Django API: `http://localhost:8000`
-- Admin: `/admin` (Grappelli at `/grappelli`)
+- Admin: `/admin`
 - Chat service (FastAPI): `http://localhost:8002` (see `docs/STREAMING_SETUP.md`)
 
 ## API & Auth
