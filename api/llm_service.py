@@ -31,12 +31,11 @@ class ModelResponse:
 class OllamaService:
     """Service for interacting with Ollama LLM models."""
     
-    # Default models for A/B testing - DeepSeek vs Llama comparison  
-    DEFAULT_MODEL_A = "deepseek-llm:7b"
-    DEFAULT_MODEL_B = "llama3.2:3b"
-    
     def __init__(self):
         self.client = ollama.AsyncClient()
+        # Use Django settings for model configuration
+        self.primary_model = getattr(settings, 'LLM_PRIMARY_MODEL', 'deepseek-llm:7b')
+        self.backup_model = getattr(settings, 'LLM_BACKUP_MODEL', 'llama3.2:3b')
     
     async def get_available_models(self) -> List[str]:
         """Get list of available Ollama models."""

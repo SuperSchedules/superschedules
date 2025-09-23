@@ -150,8 +150,78 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "chat_service"}
+    """Health check endpoint with database and LLM connectivity tests"""
+    from django.db import connection
+    from asgiref.sync import sync_to_async
+    
+    health_status = {
+        "status": "healthy",
+        "service": "chat_service",
+        "database": "unknown",
+        "llm": "unknown",
+        "models": {}
+    }
+    
+    # Test database connection
+    try:
+        @sync_to_async
+        def test_db():
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                return cursor.fetchone()
+        
+        result = await test_db()
+        if result and result[0] == 1:
+            health_status["database"] = "connected"
+        else:
+            health_status["database"] = "query_failed"
+            health_status["status"] = "unhealthy"
+    except Exception as e:
+        health_status["database"] = f"disconnected: {str(e)}"
+        health_status["status"] = "unhealthy"
+    
+    # Test LLM connectivity and configured models
+    try:
+        llm_service = get_llm_service()
+        
+        # Test if Ollama is reachable
+        available_models = await asyncio.wait_for(llm_service.get_available_models(), timeout=5)
+        
+        if available_models:
+            health_status["llm"] = "connected"
+            
+            # Test configured models are available
+            primary_model = llm_service.primary_model
+            backup_model = llm_service.backup_model
+            
+            health_status["models"]["primary"] = {
+                "name": primary_model,
+                "available": primary_model in available_models
+            }
+            health_status["models"]["backup"] = {
+                "name": backup_model,
+                "available": backup_model in available_models
+            }
+            
+            # Mark unhealthy only if primary model is missing
+            if not health_status["models"]["primary"]["available"]:
+                health_status["status"] = "unhealthy"
+            elif not health_status["models"]["backup"]["available"]:
+                health_status["status"] = "healthy"
+                health_status["warning"] = "backup model unavailable"
+                
+        else:
+            health_status["llm"] = "no_models"
+            health_status["status"] = "unhealthy"
+            
+    except asyncio.TimeoutError:
+        health_status["llm"] = "timeout"
+        health_status["status"] = "unhealthy"
+    except Exception as e:
+        health_status["llm"] = f"error: {str(e)}"
+        health_status["status"] = "unhealthy"
+    
+    return health_status
 
 
 @app.post("/chat/stream")
@@ -187,7 +257,7 @@ async def stream_chat(
             
             if request.single_model_mode:
                 # Single model mode - force DeepSeek (ignore frontend preference for now)
-                model_name = llm_service.DEFAULT_MODEL_A  # Always use DeepSeek model
+                model_name = llm_service.primary_model  # Always use primary model
                 model_id = "A"  # Always use A for single mode (the DeepSeek model)
                 
                 # Use retry mechanism for better reliability
@@ -302,7 +372,7 @@ async def stream_model_response(
     try:
         # Use default models if not specified
         if model_name is None:
-            model_name = llm_service.DEFAULT_MODEL_A if model_id == "A" else llm_service.DEFAULT_MODEL_B
+            model_name = llm_service.primary_model if model_id == "A" else llm_service.backup_model
         
         # Create system and user prompts
         current_time = datetime.now()
