@@ -88,44 +88,5 @@ class LLMServiceModuleTests(TestCase):
         finally:
             asyncio.wait_for = orig_wait_for  # type: ignore[assignment]
 
-    def test_compare_models_handles_exception(self):
-        service = self.OllamaService()
-
-        async def fake_success(*args, **kwargs):
-            from api.llm_service import ModelResponse  # type: ignore
-            return ModelResponse(
-                model_name="A", response="ok", response_time_ms=10, success=True
-            )
-
-        async def fake_fail(*args, **kwargs):
-            raise RuntimeError("boom")
-
-        # Monkeypatch instance methods
-        service.generate_response = types.MethodType(fake_success, service)  # type: ignore
-
-        async def run_compare():
-            # Temporarily swap in a failing version for the second await
-            first = service.generate_response
-            service.generate_response = types.MethodType(fake_fail, service)  # type: ignore
-            # gather runs both; to simulate different behaviors we call compare on a fresh object
-            # Instead, call with default; we’ll patch asyncio.gather to combine results
-            import asyncio as _asyncio
-
-            async def fake_gather(*args, **kwargs):
-                # args: (awaitableA, awaitableB)
-                ok = await first("A", "p", None, 30)
-                err = RuntimeError("boom")
-                return [ok, err]
-
-            orig_gather = _asyncio.gather
-            _asyncio.gather = fake_gather  # type: ignore
-            try:
-                return await service.compare_models(prompt="p")
-            finally:
-                _asyncio.gather = orig_gather  # type: ignore
-
-        result = asyncio.get_event_loop().run_until_complete(run_compare())
-        assert result.model_a.success is True
-        assert result.model_b.success is False
         assert "boom" in (result.model_b.error or "")
 

@@ -1,7 +1,7 @@
 from django.test.runner import DiscoverRunner
 from django.db import connections
 
-class PgOnlyRunner(DiscoverRunner):
+class PgVectorTestRunner(DiscoverRunner):
     def setup_databases(self, **kwargs):
         conn = connections["default"]
         conn.ensure_connection()
