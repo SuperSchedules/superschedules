@@ -13,14 +13,12 @@ class TriggerCollectionTests(TestCase):
     """Test the _trigger_collection function that integrates with the collector API."""
 
     def setUp(self):
-        """Create test data."""
         self.strategy = baker.make(SiteStrategy, domain="example.com", best_selectors=["article", ".event"])
         self.source = baker.make(Source, base_url="https://example.com/events", site_strategy=self.strategy,
                                 status=Source.Status.NOT_RUN)
 
     @patch('api.views.requests.post')
     def test_successful_collection_with_events(self, mock_post):
-        """Test successful collection that creates events in database."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -80,7 +78,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_successful_collection_no_events(self, mock_post):
-        """Test successful collection but no events found."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'success': True, 'events': []}
@@ -98,7 +95,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_api_500_error(self, mock_post):
-        """Test handling of API 500 error."""
         mock_response = Mock()
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
@@ -116,7 +112,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_api_404_error(self, mock_post):
-        """Test handling of API 404 error."""
         mock_response = Mock()
         mock_response.status_code = 404
         mock_response.text = "Not Found"
@@ -130,7 +125,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_connection_timeout(self, mock_post):
-        """Test handling of connection timeout."""
         mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
 
         api_views._trigger_collection(self.source)
@@ -141,7 +135,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_connection_error(self, mock_post):
-        """Test handling of general connection error."""
         mock_post.side_effect = requests.exceptions.ConnectionError("Failed to connect")
 
         api_views._trigger_collection(self.source)
@@ -152,7 +145,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_schema_org_place_data(self, mock_post):
-        """Test handling of Schema.org Place objects in location field."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -187,7 +179,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_source_without_strategy(self, mock_post):
-        """Test collection for source without site strategy."""
         source_no_strategy = baker.make(Source, base_url="https://newsite.com/events", site_strategy=None,
                                        status=Source.Status.NOT_RUN)
         mock_response = Mock()
@@ -217,7 +208,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_partial_event_failure(self, mock_post):
-        """Test that one failing event doesn't stop others from being created."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -262,7 +252,6 @@ class TriggerCollectionTests(TestCase):
 
     @patch('api.views.requests.post')
     def test_custom_collector_url(self, mock_post):
-        """Test using custom COLLECTOR_URL setting."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'success': True, 'events': []}

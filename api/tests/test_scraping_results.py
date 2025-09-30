@@ -15,7 +15,6 @@ class SaveScrapeResultsTests(TestCase):
     """Test the save_scrape_results endpoint that processes scraping job results."""
 
     def setUp(self):
-        """Create test data."""
         self.client = TestClient(router)
         self.user = baker.make(User, username="testuser")
         self.service_token = baker.make(ServiceToken, name="test_service")
@@ -24,7 +23,6 @@ class SaveScrapeResultsTests(TestCase):
                              submitted_by=self.user, status="pending")
 
     def test_successful_results_with_events(self):
-        """Test successful scraping results creates events and updates job."""
         payload = {
             "success": True,
             "events_found": 2,
@@ -87,7 +85,6 @@ class SaveScrapeResultsTests(TestCase):
         assert self.job.completed_at is not None
 
     def test_failed_scraping_job(self):
-        """Test failed scraping results updates job status appropriately."""
         payload = {"success": False, "events_found": 0, "pages_processed": 1, "error_message": "Connection timeout",
                   "events": []}
 
@@ -104,7 +101,6 @@ class SaveScrapeResultsTests(TestCase):
         assert self.job.completed_at is not None
 
     def test_creates_new_source_for_domain(self):
-        """Test that a source is created if it doesn't exist."""
         assert not Source.objects.filter(base_url="https://example.com").exists()
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
@@ -123,7 +119,6 @@ class SaveScrapeResultsTests(TestCase):
         assert source.site_strategy == self.strategy
 
     def test_reuses_existing_source(self):
-        """Test that existing source is reused instead of creating duplicate."""
         existing_source = baker.make(Source, base_url="https://example.com", user=self.user)
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
@@ -140,7 +135,6 @@ class SaveScrapeResultsTests(TestCase):
         assert event.source == existing_source
 
     def test_updates_source_strategy_if_changed(self):
-        """Test that source strategy is updated if a new strategy exists for the domain."""
         existing_source = baker.make(Source, base_url="https://example.com", site_strategy=None)
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
@@ -156,7 +150,6 @@ class SaveScrapeResultsTests(TestCase):
         assert existing_source.site_strategy == self.strategy
 
     def test_optional_event_fields(self):
-        """Test that optional event fields are handled correctly."""
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_min", "title": "Minimal Event", "description": "Description",
                              "location": "Location", "start_time": "2024-07-15T18:00:00Z"}]}
@@ -176,7 +169,6 @@ class SaveScrapeResultsTests(TestCase):
         assert event.affiliate_tracking_id == ""
 
     def test_requires_service_token_auth(self):
-        """Test that endpoint requires service token authentication."""
         payload = {"success": True, "events_found": 0, "pages_processed": 1, "events": []}
 
         # Request without authentication
@@ -184,7 +176,6 @@ class SaveScrapeResultsTests(TestCase):
         assert response.status_code == 401
 
     def test_nonexistent_job_returns_404(self):
-        """Test that requesting nonexistent job returns 404."""
         payload = {"success": True, "events_found": 0, "pages_processed": 1, "events": []}
 
         response = self.client.post("/scrape/99999/results", json=payload,

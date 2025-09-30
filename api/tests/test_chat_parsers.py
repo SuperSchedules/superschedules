@@ -9,47 +9,41 @@ from events.models import Event, Source
 
 class ChatParsersTests(TestCase):
     def test_parse_ages_from_message(self):
-        """Test age extraction from various message formats."""
         assert api_views._parse_ages_from_message("for 5 year old") == [5]
         assert api_views._parse_ages_from_message("for 4-6 years old") == [4, 6]
         assert api_views._parse_ages_from_message("ages 3 to 5 years old") == [3, 5]
         assert api_views._parse_ages_from_message("no ages here") is None
 
     def test_parse_ages_edge_cases(self):
-        """Test age parsing edge cases."""
         assert api_views._parse_ages_from_message("15 and 17 year olds") == [15, 17]
         assert api_views._parse_ages_from_message("3-5 year olds") == [3, 5]
         assert api_views._parse_ages_from_message("3 - 5 years old") == [3, 5]
-        # Note: regex requires "old" after years, so "for 8 years" alone won't match
+        # Regex requires "old" after "years" - won't match "for 8 years" alone
         assert api_views._parse_ages_from_message("for 8 years old") == [8]
         assert api_views._parse_ages_from_message("for 8 years") is None
 
     def test_parse_location_from_message(self):
-        """Test location extraction from messages."""
         Ctx = api_views.ChatContextSchema
         assert api_views._parse_location_from_message("events in Boston", Ctx()) == "boston"
         assert api_views._parse_location_from_message("meet at San Jose, please", Ctx()) == "san jose"
         assert api_views._parse_location_from_message("no location", Ctx(location="seattle")) == "seattle"
 
     def test_parse_location_edge_cases(self):
-        """Test location parsing with punctuation and complex formats."""
         Ctx = api_views.ChatContextSchema
         assert api_views._parse_location_from_message("activities in Newton.", Ctx()) == "newton"
         assert api_views._parse_location_from_message("things near Cambridge!", Ctx()) == "cambridge"
-        # Location parser strips trailing commas, so "Boston, MA" becomes "boston" only
+        # Parser stops at punctuation - "Boston, MA" captures only "boston"
         result = api_views._parse_location_from_message("events in Boston, MA", Ctx())
-        assert result == "boston"  # Comma and MA are outside capture due to punctuation stop
+        assert result == "boston"
         assert api_views._parse_location_from_message("just some text", Ctx()) is None
 
     def test_parse_timeframe_from_message(self):
-        """Test timeframe extraction from messages."""
         assert api_views._parse_timeframe_from_message("today") == "today"
         assert api_views._parse_timeframe_from_message("tomorrow") == "tomorrow"
         assert api_views._parse_timeframe_from_message("this weekend") == "this weekend"
         assert api_views._parse_timeframe_from_message("something else") == "upcoming"
 
     def test_parse_timeframe_variations(self):
-        """Test various timeframe formats."""
         assert api_views._parse_timeframe_from_message("this week") == "this week"
         assert api_views._parse_timeframe_from_message("this month") == "this month"
         assert api_views._parse_timeframe_from_message("next 3 hours") == "next 3 hours"
@@ -60,12 +54,10 @@ class ChatParsersTests(TestCase):
         assert api_views._parse_timeframe_from_message("") == "upcoming"
 
     def test_detect_topic_change(self):
-        """Test detection of topic change keywords."""
         assert api_views._detect_topic_change("actually let's do something different") is True
         assert api_views._detect_topic_change("keep going") is False
 
     def test_detect_topic_change_all_keywords(self):
-        """Test all topic change keywords."""
         assert api_views._detect_topic_change("actually I want something else") is True
         assert api_views._detect_topic_change("instead show me parks") is True
         assert api_views._detect_topic_change("nevermind, let's try museums") is True
@@ -78,13 +70,11 @@ class ChatParsersTests(TestCase):
         assert api_views._detect_topic_change("show me the details") is False
 
     def test_extract_follow_up_questions(self):
-        """Test extraction of follow-up questions from LLM responses."""
         text = "Do you like indoor events? Any age range? Great!"
         questions = api_views._extract_follow_up_questions(text)
         assert questions == ["Do you like indoor events?", "Any age range?"]
 
     def test_extract_follow_up_questions_edge_cases(self):
-        """Test follow-up question extraction edge cases."""
         text = "Here are some events. They look great."
         assert api_views._extract_follow_up_questions(text) == []
 
@@ -93,6 +83,7 @@ class ChatParsersTests(TestCase):
         assert len(questions) == 1
         assert questions[0] == "Would you like more options?"
 
+        # Limited to 3 questions max
         text = "Question 1? Question 2? Question 3? Question 4? Question 5?"
         questions = api_views._extract_follow_up_questions(text)
         assert len(questions) == 3
@@ -105,10 +96,7 @@ class ChatParsersTests(TestCase):
 
 
 class GetRelevantEventIdsTests(TestCase):
-    """Test the _get_relevant_event_ids function."""
-
     def setUp(self):
-        """Create test data for event filtering tests."""
         self.source = baker.make(Source, name="Test Source")
         now = timezone.now()
 
@@ -130,7 +118,6 @@ class GetRelevantEventIdsTests(TestCase):
                                           start_time=far_future.replace(hour=12, minute=0))
 
     def test_filter_by_location(self):
-        """Test filtering events by location."""
         result = api_views._get_relevant_event_ids(ages=None, location="Newton", timeframe="upcoming", user=None)
         assert len(result) <= 3
         events = Event.objects.filter(id__in=result)
@@ -138,7 +125,6 @@ class GetRelevantEventIdsTests(TestCase):
             assert "Newton" in event.location
 
     def test_filter_by_timeframe_today(self):
-        """Test filtering events happening today."""
         result = api_views._get_relevant_event_ids(ages=None, location=None, timeframe="today", user=None)
         events = Event.objects.filter(id__in=result)
         today = timezone.now().date()
@@ -146,7 +132,6 @@ class GetRelevantEventIdsTests(TestCase):
             assert event.start_time.date() == today
 
     def test_filter_by_timeframe_tomorrow(self):
-        """Test filtering events happening tomorrow."""
         result = api_views._get_relevant_event_ids(ages=None, location=None, timeframe="tomorrow", user=None)
         events = Event.objects.filter(id__in=result)
         tomorrow = (timezone.now() + timedelta(days=1)).date()
@@ -154,7 +139,6 @@ class GetRelevantEventIdsTests(TestCase):
             assert event.start_time.date() == tomorrow
 
     def test_filter_by_timeframe_week(self):
-        """Test filtering events in the next week."""
         result = api_views._get_relevant_event_ids(ages=None, location=None, timeframe="this week", user=None)
         events = Event.objects.filter(id__in=result)
         max_date = timezone.now() + timedelta(days=7)
@@ -162,7 +146,6 @@ class GetRelevantEventIdsTests(TestCase):
             assert event.start_time <= max_date
 
     def test_filter_combined_location_and_time(self):
-        """Test filtering with both location and timeframe."""
         result = api_views._get_relevant_event_ids(ages=None, location="Newton", timeframe="today", user=None)
         events = Event.objects.filter(id__in=result)
         today = timezone.now().date()
@@ -171,7 +154,6 @@ class GetRelevantEventIdsTests(TestCase):
             assert event.start_time.date() == today
 
     def test_limit_to_three_results(self):
-        """Test that results are limited to 3 events."""
         now = timezone.now()
         for i in range(5):
             baker.make(Event, source=self.source, title=f"Extra Event {i}", location="Boston, MA",
@@ -181,13 +163,11 @@ class GetRelevantEventIdsTests(TestCase):
         assert len(result) <= 3
 
     def test_empty_database(self):
-        """Test behavior with no events."""
         Event.objects.all().delete()
         result = api_views._get_relevant_event_ids(ages=None, location="Anywhere", timeframe="today", user=None)
         assert result == []
 
     def test_no_matching_events(self):
-        """Test with filters that match no events."""
         result = api_views._get_relevant_event_ids(ages=None, location="NonexistentCity", timeframe="today", user=None)
         assert result == []
 
