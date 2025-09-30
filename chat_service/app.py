@@ -5,6 +5,7 @@ This runs as a separate service alongside Django.
 import os
 import json
 import asyncio
+import logging
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -28,6 +29,8 @@ from events.models import Event
 from api.llm_service import get_llm_service, create_event_discovery_prompt
 from api.rag_service import get_rag_service
 from . import debug_routes
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Superschedules Chat Service",
@@ -130,8 +133,7 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
             user = await sync_to_async(User.objects.get)(id=claims['user_id'])
         except User.DoesNotExist:
             # Log warning but don't fail - user might have been deleted
-            import logging
-            logging.warning(f"User {claims['user_id']} not found for valid JWT token")
+            logger.warning("User %d not found for valid JWT token", claims['user_id'])
         
         return JWTClaims(
             user_id=claims['user_id'],
@@ -244,13 +246,13 @@ async def stream_chat(
             try:
                 available_models = await asyncio.wait_for(llm_service.get_available_models(), timeout=10)
                 if not available_models:
-                    print("Warning: No models available from Ollama")
+                    logger.warning("No models available from Ollama")
                 else:
-                    print(f"Ollama health check OK: {len(available_models)} models available")
+                    logger.info("Ollama health check OK: %d models available", len(available_models))
             except asyncio.TimeoutError:
-                print("Warning: Ollama health check timed out")
+                logger.warning("Ollama health check timed out")
             except Exception as e:
-                print(f"Warning: Ollama health check failed: {e}")
+                logger.warning("Ollama health check failed: %s", e)
             
             # Get relevant events for context
             relevant_events = await get_relevant_events(request.message)
@@ -279,10 +281,11 @@ async def stream_chat(
                         
                         # Log progress periodically
                         if chunk_count % 50 == 0:
-                            print(f"Streaming progress: {chunk_count} chunks sent for {model_id}")
-                            
+                            logger.debug("Streaming progress: %d chunks sent for %s", chunk_count, model_id)
+
                 except Exception as e:
-                    print(f"Stream error after {chunk_count} chunks for {model_id}: {type(e).__name__}: {e}")
+                    logger.error("Stream error after %d chunks for %s: %s: %s", chunk_count, model_id,
+                               type(e).__name__, e)
                     error_chunk = StreamChunk(
                         model=model_id, 
                         token="", 
@@ -457,14 +460,14 @@ async def get_relevant_events(message: str) -> List[Dict]:
         context_events = await loop.run_in_executor(None, run_rag_search)
         
         if context_events:
-            print(f"RAG found {len(context_events)} relevant events")
+            logger.info("RAG found %d relevant events", len(context_events))
             return context_events
         else:
-            print("RAG found no relevant events")
+            logger.info("RAG found no relevant events")
             return []
-        
+
     except Exception as e:
-        print(f"Error in RAG search: {e}")
+        logger.error("Error in RAG search: %s", e)
         return []
 
 
@@ -506,13 +509,13 @@ async def stream_model_response_with_retry(
                 
         except Exception as e:
             if attempt < max_retries:
-                print(f"Stream attempt {attempt + 1} failed for {model_id}: {e}")
-                print(f"Retrying in 2 seconds... ({attempt + 1}/{max_retries})")
+                logger.warning("Stream attempt %d failed for %s: %s", attempt + 1, model_id, e)
+                logger.info("Retrying in 2 seconds... (%d/%d)", attempt + 1, max_retries)
                 await asyncio.sleep(2)
                 continue
             else:
                 # Final attempt failed, yield error
-                print(f"All {max_retries + 1} stream attempts failed for {model_id}: {e}")
+                logger.error("All %d stream attempts failed for %s: %s", max_retries + 1, model_id, e)
                 yield StreamChunk(
                     model=model_id,
                     token="",
@@ -564,7 +567,7 @@ async def merge_async_generators(*generators):
                 yield data
             elif event_type == 'error':
                 # Handle generator error
-                print(f"Generator error: {data}")
+                logger.error("Generator error: %s", data)
             elif event_type == 'done':
                 completed += 1
                 

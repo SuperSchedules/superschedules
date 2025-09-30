@@ -90,12 +90,16 @@ python manage.py update_embeddings
 ### Running Tests
 ```bash
 # Django tests (uses custom pgvector-aware test runner)
-python manage.py test --settings=config.test_settings
+# --buffer flag suppresses stdout/stderr for clean output
+python manage.py test --settings=config.test_settings --buffer
 
 # Target specific modules
-python manage.py test api
-python manage.py test events
-python manage.py test chat_service
+python manage.py test api --settings=config.test_settings --buffer
+python manage.py test events --settings=config.test_settings --buffer
+python manage.py test chat_service --settings=config.test_settings --buffer
+
+# View logs during tests (for debugging)
+LOG_LEVEL=INFO python manage.py test --settings=config.test_settings
 
 # FastAPI tests
 pytest chat_service/tests/
