@@ -2,7 +2,10 @@ from django.contrib import admin
 from django.contrib import messages
 from django.conf import settings
 import requests
+import logging
 from .models import Source, Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch
+
+logger = logging.getLogger(__name__)
 
 
 def process_sources_via_collector(modeladmin, request, queryset):
@@ -37,7 +40,7 @@ def process_sources_via_collector(modeladmin, request, queryset):
                             # Use Schema.org aware event creation
                             Event.create_with_schema_org_data(event_data, source)
                         except Exception as e:
-                            print(f"Failed to save event: {e}")
+                            logger.error("Failed to save event: %s", e)
                     
                     # Update source status and last run time
                     from django.utils import timezone

@@ -1,9 +1,11 @@
+# NOTE: This workflow exists in all 4 repos (superschedules, superschedules_navigator,
+# superschedules_collector, superschedules_frontend). If you modify this file, ask if
+# the changes should be replicated to the other repos.
+
 name: Build and Push superschedules-api
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 permissions:
