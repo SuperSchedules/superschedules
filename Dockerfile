@@ -35,5 +35,14 @@ COPY . .
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
 
+# Collect static files into the image
+# Set minimal environment variables needed for collectstatic
+ENV DJANGO_SECRET_KEY=build-time-secret \
+    DB_HOST=localhost \
+    DB_NAME=placeholder \
+    DB_USER=placeholder \
+    DB_PASSWORD=placeholder
+RUN python manage.py collectstatic --noinput
+
 # Run Django with gunicorn + uvicorn workers (supports both Django and FastAPI)
 CMD ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--workers", "3"]
