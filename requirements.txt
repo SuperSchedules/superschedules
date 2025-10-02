@@ -12,6 +12,7 @@ model-bakery
 django-dynamic-fixture
 django-grappelli
 ollama==0.5.3
+boto3
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 gunicorn

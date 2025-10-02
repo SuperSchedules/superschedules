@@ -173,8 +173,20 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", 3600))
 
 # LLM Configuration
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")  # 'ollama' or 'bedrock'
+
+# Ollama configuration (for local development)
 LLM_PRIMARY_MODEL = os.environ.get("LLM_PRIMARY_MODEL", "deepseek-llm:7b")
 LLM_BACKUP_MODEL = os.environ.get("LLM_BACKUP_MODEL", "llama3.2:3b")
+
+# AWS Bedrock configuration (for production)
+AWS_BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "us-east-1")
+AWS_BEDROCK_MODEL_ID = os.environ.get(
+    "AWS_BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0"
+)
+AWS_BEDROCK_BACKUP_MODEL_ID = os.environ.get(
+    "AWS_BEDROCK_BACKUP_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0"
+)
 
 # Logging Configuration
 LOGGING = {

@@ -1,223 +1,21 @@
 """
-LLM service for integrating with Ollama models.
-Supports A/B testing with multiple models running in parallel.
+LLM service for event discovery and chat.
+Uses provider abstraction to support multiple LLM backends (Ollama, Bedrock, etc.).
 """
 
-import asyncio
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
+from typing import List, Dict, Any, Tuple
 from datetime import datetime
 
-import ollama
-from django.conf import settings
+from .llm_providers import get_llm_provider, ModelResponse
 
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ModelResponse:
-    """Response from an LLM model."""
-    model_name: str
-    response: str
-    response_time_ms: int
-    success: bool
-    error: Optional[str] = None
-
-
-
-
-class OllamaService:
-    """Service for interacting with Ollama LLM models."""
-    
-    def __init__(self):
-        self.client = ollama.AsyncClient()
-        # Use Django settings for model configuration
-        self.primary_model = getattr(settings, 'LLM_PRIMARY_MODEL', 'deepseek-llm:7b')
-        self.backup_model = getattr(settings, 'LLM_BACKUP_MODEL', 'llama3.2:3b')
-    
-    async def get_available_models(self) -> List[str]:
-        """Get list of available Ollama models."""
-        try:
-            models = await self.client.list()
-            return [model.get('name', model.get('model', 'unknown')) for model in models.get('models', [])]
-        except Exception as e:
-            logger.error(f"Failed to get available models: {e}")
-            return []
-    
-    async def generate_response(
-        self, 
-        model: str, 
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        timeout_seconds: int = 30,
-        stream: bool = False
-    ) -> ModelResponse:
-        """Generate response from a single model."""
-        start_time = datetime.now()
-        
-        try:
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            
-            response = await asyncio.wait_for(
-                self.client.chat(
-                    model=model,
-                    messages=messages,
-                    stream=False
-                ),
-                timeout=timeout_seconds
-            )
-            
-            end_time = datetime.now()
-            response_time = int((end_time - start_time).total_seconds() * 1000)
-            
-            return ModelResponse(
-                model_name=model,
-                response=response['message']['content'].strip(),
-                response_time_ms=response_time,
-                success=True
-            )
-            
-        except asyncio.TimeoutError:
-            response_time = timeout_seconds * 1000
-            return ModelResponse(
-                model_name=model,
-                response="",
-                response_time_ms=response_time,
-                success=False,
-                error=f"Timeout after {timeout_seconds}s"
-            )
-        except Exception as e:
-            end_time = datetime.now()
-            response_time = int((end_time - start_time).total_seconds() * 1000)
-            
-            return ModelResponse(
-                model_name=model,
-                response="",
-                response_time_ms=response_time,
-                success=False,
-                error=str(e)
-            )
-    
-    async def generate_streaming_response(
-        self, 
-        model: str, 
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        timeout_seconds: int = 60
-    ):
-        """Generate streaming response from a single model with improved error handling."""
-        start_time = datetime.now()
-        full_response = ""
-        last_chunk_time = start_time
-        
-        try:
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            
-            logger.info(f"Starting stream for model {model}, timeout: {timeout_seconds}s")
-            
-            # Add timeout wrapper for the entire streaming operation
-            stream_generator = await asyncio.wait_for(
-                self.client.chat(
-                    model=model,
-                    messages=messages,
-                    stream=True
-                ),
-                timeout=timeout_seconds
-            )
-            
-            chunk_count = 0
-            
-            # Stream response from Ollama with chunk timeout monitoring
-            async for chunk in stream_generator:
-                current_time = datetime.now()
-                chunk_count += 1
-                
-                # Check if we've been silent too long (potential hang)
-                time_since_last_chunk = (current_time - last_chunk_time).total_seconds()
-                if time_since_last_chunk > 30:  # 30 second silence threshold
-                    logger.warning(f"Long pause detected: {time_since_last_chunk:.1f}s since last chunk for {model}")
-                
-                last_chunk_time = current_time
-                
-                try:
-                    token = chunk['message']['content']
-                    full_response += token
-                    
-                    # Yield each token
-                    yield {
-                        'token': token,
-                        'done': False,
-                        'model_name': model,
-                        'response_time_ms': int((current_time - start_time).total_seconds() * 1000),
-                        'chunk_number': chunk_count
-                    }
-                    
-                except KeyError as e:
-                    logger.error(f"Malformed chunk from {model}: {chunk}, error: {e}")
-                    # Continue processing - don't stop the stream for one bad chunk
-                    continue
-                    
-            # Final response with complete metadata
-            end_time = datetime.now()
-            response_time = int((end_time - start_time).total_seconds() * 1000)
-            
-            logger.info(f"Stream completed for {model}: {chunk_count} chunks, {response_time}ms, {len(full_response)} chars")
-            
-            yield {
-                'token': '',
-                'done': True,
-                'model_name': model,
-                'response_time_ms': response_time,
-                'full_response': full_response.strip(),
-                'success': True,
-                'total_chunks': chunk_count
-            }
-            
-        except asyncio.TimeoutError:
-            end_time = datetime.now()
-            response_time = int((end_time - start_time).total_seconds() * 1000)
-            error_msg = f"Stream timeout after {timeout_seconds}s for {model}"
-            logger.error(f"{error_msg}, partial response: {len(full_response)} chars")
-            
-            yield {
-                'token': '',
-                'done': True,
-                'model_name': model,
-                'response_time_ms': response_time,
-                'success': False,
-                'error': error_msg,
-                'partial_response': full_response if full_response else None
-            }
-            
-        except Exception as e:
-            end_time = datetime.now()
-            response_time = int((end_time - start_time).total_seconds() * 1000)
-            error_msg = f"Stream error for {model}: {type(e).__name__}: {str(e)}"
-            logger.error(f"{error_msg}, partial response: {len(full_response)} chars")
-            
-            yield {
-                'token': '',
-                'done': True,
-                'model_name': model,
-                'response_time_ms': response_time,
-                'success': False,
-                'error': error_msg,
-                'partial_response': full_response if full_response else None
-            }
-    
-
-
 def create_event_discovery_prompt(message: str, events: List[Dict[str, Any]], context: Dict[str, Any]) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat."""
-    
+
     system_prompt = """You are a local events assistant. You MUST use the events provided in the user prompt.
 
 CRITICAL INSTRUCTIONS:
@@ -246,16 +44,15 @@ Available upcoming events:
     if events:
         for i, event in enumerate(events[:10], 1):  # Increased to 10 events for richer context
             user_prompt += f"\n{i}. {event.get('title', 'Untitled Event')}"
-            
+
             # Date and time on new line
             if event.get('start_time'):
                 try:
-                    from datetime import datetime
                     dt = datetime.fromisoformat(event['start_time'].replace('Z', '+00:00'))
                     formatted_date = dt.strftime('%A, %B %d')
                     formatted_time = dt.strftime('%I:%M %p')
                     user_prompt += f"\n{formatted_date} - {formatted_time}"
-                    
+
                     if event.get('end_time'):
                         try:
                             dt_end = datetime.fromisoformat(event['end_time'].replace('Z', '+00:00'))
@@ -265,20 +62,20 @@ Available upcoming events:
                             pass
                 except:
                     user_prompt += f"\n{event['start_time']}"
-            
+
             # Location on new line
             if event.get('location'):
                 user_prompt += f"\n{event['location']}"
-            
+
             # Abbreviated description on new line
             if event.get('description'):
                 desc = event['description'][:150] + "..." if len(event['description']) > 150 else event['description']
                 user_prompt += f"\n{desc}"
-            
+
             # URL on new line
             if event.get('url'):
                 user_prompt += f"\n{event['url']}"
-                
+
             user_prompt += "\n"
     else:
         user_prompt += "\n(No matching upcoming events found in database)"
@@ -290,13 +87,14 @@ IMPORTANT: Only use the events listed above. Do not invent any events. If the li
     return system_prompt, user_prompt
 
 
-# Global service instance
-_llm_service = None
+def get_llm_service():
+    """
+    Get the configured LLM provider instance.
 
+    This function maintains backward compatibility with existing code
+    while using the new provider abstraction layer.
 
-def get_llm_service() -> OllamaService:
-    """Get the global LLM service instance."""
-    global _llm_service
-    if _llm_service is None:
-        _llm_service = OllamaService()
-    return _llm_service
+    Returns:
+        BaseLLMProvider: The configured provider (Ollama, Bedrock, etc.)
+    """
+    return get_llm_provider()
