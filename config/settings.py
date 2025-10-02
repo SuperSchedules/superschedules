@@ -4,8 +4,12 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
-DEBUG = True
-ALLOWED_HOSTS = ['superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',]
+DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+
+# Allow localhost and any host specified in environment
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+if alb_host := os.environ.get('ALB_HOST'):
+    ALLOWED_HOSTS.append(alb_host)
 
 INSTALLED_APPS = [
     'grappelli',
@@ -121,6 +125,7 @@ USE_L10N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -143,8 +148,11 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
-    "superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com",
 ]
+
+# Add ALB host dynamically if provided
+if alb_host := os.environ.get('ALB_HOST'):
+    CORS_ALLOWED_ORIGINS.append(f"http://{alb_host}")
 
 # Custom test runner for pgvector support
 TEST_RUNNER = 'test_runner.PgVectorTestRunner'
