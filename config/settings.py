@@ -172,6 +172,10 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@example.com"
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", 3600))
 
+# Service URLs for health checks
+COLLECTOR_URL = os.environ.get("COLLECTOR_URL", "http://localhost:8001")
+NAVIGATOR_URL = os.environ.get("NAVIGATOR_URL", "http://localhost:8004")
+
 # LLM Configuration
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")  # 'ollama' or 'bedrock'
 
