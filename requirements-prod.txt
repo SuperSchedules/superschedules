@@ -4,6 +4,7 @@ djangorestframework-simplejwt
 django-ninja
 django-ninja-jwt
 django-cors-headers
+whitenoise
 pgvector
 psycopg2-binary
 django-grappelli
