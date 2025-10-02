@@ -5,7 +5,7 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 DEBUG = True
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',]
 
 INSTALLED_APPS = [
     'grappelli',
@@ -143,6 +143,7 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
+    "superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com",
 ]
 
 # Custom test runner for pgvector support
