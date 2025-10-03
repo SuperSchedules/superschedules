@@ -150,7 +150,7 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
         raise HTTPException(status_code=401, detail=f"Missing required claim: {str(e)}")
 
 
-@app.get("/health")
+@app.get("/chat/health")
 async def health_check():
     """Health check endpoint with database and LLM connectivity tests"""
     from django.db import connection
