@@ -6,14 +6,14 @@ import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 from django.test import TestCase
 
-from api.llm_service import OllamaService, ModelResponse
+from api.llm_providers import OllamaProvider, ModelResponse
 
 
 class LLMStreamingTests(TestCase):
     """Test LLM streaming and model management functionality."""
     
     def setUp(self):
-        self.service = OllamaService()
+        self.service = OllamaProvider()
     
     @patch('ollama.AsyncClient')
     async def test_get_available_models_success(self, mock_client_class):
@@ -30,7 +30,7 @@ class LLMStreamingTests(TestCase):
             ]
         }
         
-        service = OllamaService()
+        service = OllamaProvider()
         models = await service.get_available_models()
         
         self.assertEqual(models, ['llama3.2:3b', 'deepseek-llm:7b', 'mistral:7b'])
@@ -45,7 +45,7 @@ class LLMStreamingTests(TestCase):
         # Mock exception
         mock_client.list.side_effect = Exception("Connection failed")
         
-        service = OllamaService()
+        service = OllamaProvider()
         models = await service.get_available_models()
         
         self.assertEqual(models, [])
@@ -66,7 +66,7 @@ class LLMStreamingTests(TestCase):
         
         mock_client.chat.return_value = mock_stream()
         
-        service = OllamaService()
+        service = OllamaProvider()
         chunks = []
         async for chunk in service.generate_streaming_response(
             model="test-model",
@@ -102,7 +102,7 @@ class LLMStreamingTests(TestCase):
         # Mock exception during streaming
         mock_client.chat.side_effect = Exception("Model not found")
         
-        service = OllamaService()
+        service = OllamaProvider()
         chunks = []
         async for chunk in service.generate_streaming_response(
             model="nonexistent-model",
