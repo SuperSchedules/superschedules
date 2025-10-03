@@ -155,12 +155,18 @@ async def health_check():
     """Health check endpoint with database and LLM connectivity tests"""
     from django.db import connection
     from asgiref.sync import sync_to_async
-    
+    from django.conf import settings
+
     health_status = {
         "status": "healthy",
         "service": "chat_service",
         "database": "unknown",
         "llm": "unknown",
+        "llm_provider": {
+            "env_var": os.environ.get("LLM_PROVIDER", "not set"),
+            "settings": getattr(settings, "LLM_PROVIDER", "not set"),
+            "provider_class": None,
+        },
         "models": {}
     }
     
@@ -185,8 +191,9 @@ async def health_check():
     # Test LLM connectivity and configured models
     try:
         llm_service = get_llm_service()
-        
-        # Test if Ollama is reachable
+        health_status["llm_provider"]["provider_class"] = llm_service.__class__.__name__
+
+        # Test if LLM provider is reachable
         available_models = await asyncio.wait_for(llm_service.get_available_models(), timeout=5)
         
         if available_models:
