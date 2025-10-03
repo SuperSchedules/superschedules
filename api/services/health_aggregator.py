@@ -28,7 +28,9 @@ class HealthAggregator:
 
     async def check_database(self) -> Dict[str, Any]:
         """Check database connection and pgvector extension."""
-        try:
+        from asgiref.sync import sync_to_async
+
+        def _check_db():
             with connection.cursor() as cursor:
                 # Check basic connection
                 cursor.execute("SELECT 1")
@@ -39,7 +41,10 @@ class HealthAggregator:
                     "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
                 )
                 has_pgvector = cursor.fetchone()[0]
+                return has_pgvector
 
+        try:
+            has_pgvector = await sync_to_async(_check_db)()
             return {
                 "status": "healthy",
                 "details": {
