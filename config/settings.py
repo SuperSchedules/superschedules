@@ -6,14 +6,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-# Allow localhost and any host specified in environment
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-if alb_host := os.environ.get('ALB_HOST'):
-    ALLOWED_HOSTS.append(alb_host)
-
-# In production (when DEBUG=False), allow all hosts since we're behind ALB
-if not DEBUG:
-    ALLOWED_HOSTS = ['*']
+# Allow all hosts - we're always behind ALB/proxy in production
+# and localhost for local development
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'grappelli',
