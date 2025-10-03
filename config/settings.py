@@ -11,6 +11,10 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 if alb_host := os.environ.get('ALB_HOST'):
     ALLOWED_HOSTS.append(alb_host)
 
+# In production (when DEBUG=False), allow all hosts since we're behind ALB
+if not DEBUG:
+    ALLOWED_HOSTS = ['*']
+
 INSTALLED_APPS = [
     'grappelli',
     'django.contrib.admin',
