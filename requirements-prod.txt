@@ -14,5 +14,5 @@ httpx
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 gunicorn
-torch==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
+torch
 sentence-transformers==2.7.0
