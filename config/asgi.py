@@ -10,9 +10,8 @@ from django.conf import settings
 
 django_asgi_app = get_asgi_application()
 
-# WhiteNoise expects URL prefixes without leading slash
-static_prefix = settings.STATIC_URL.lstrip('/') or None
-django_asgi_app = WhiteNoise(django_asgi_app, root=str(settings.STATIC_ROOT), prefix=static_prefix)
+# WhiteNoise for ASGI static file serving
+django_asgi_app = WhiteNoise(django_asgi_app, root=str(settings.STATIC_ROOT))
 
 # Import FastAPI app after Django is configured
 from chat_service.app import app as fastapi_app
