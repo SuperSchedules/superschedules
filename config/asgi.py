@@ -4,14 +4,8 @@ from django.core.asgi import get_asgi_application
 # Set Django settings before importing FastAPI app
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
-# Get Django ASGI application and wrap with WhiteNoise
-from whitenoise import WhiteNoise
-from django.conf import settings
-
+# Get Django ASGI application (WhiteNoise middleware handles static files)
 django_asgi_app = get_asgi_application()
-
-# WhiteNoise for ASGI static file serving
-django_asgi_app = WhiteNoise(django_asgi_app, root=str(settings.STATIC_ROOT))
 
 # Import FastAPI app after Django is configured
 from chat_service.app import app as fastapi_app
