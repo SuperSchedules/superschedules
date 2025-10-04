@@ -9,13 +9,13 @@ from api.services.health_aggregator import get_health_aggregator
 router = Router()
 
 
-@router.get("/live", auth=None)
+@router.api_operation(["GET", "HEAD"], "/live", auth=None)
 def live(request):
     """Kubernetes liveness probe - is the app running?"""
     return {"status": "ok"}
 
 
-@router.get("/ready", auth=None)
+@router.api_operation(["GET", "HEAD"], "/ready", auth=None)
 def ready(request):
     """Kubernetes readiness probe - can the app serve traffic?"""
     checks = {}
