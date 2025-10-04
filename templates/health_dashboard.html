@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Superschedules Health Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 2rem;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .meta {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 2rem;
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-healthy { background: #10b981; color: white; }
+        .status-degraded { background: #f59e0b; color: white; }
+        .status-unhealthy { background: #ef4444; color: white; }
+
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        .service-card {
+            background: #1e293b;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            border: 1px solid #334155;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .service-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .service-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .service-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        .service-details {
+            background: #0f172a;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            font-size: 0.875rem;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #334155;
+        }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-label { color: #94a3b8; }
+        .detail-value { color: #e2e8f0; font-weight: 500; }
+        .error-message {
+            background: #7f1d1d;
+            color: #fca5a5;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
+        }
+        .icon {
+            display: inline-block;
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: 50%;
+        }
+        .icon-healthy { background: #10b981; }
+        .icon-unhealthy { background: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏥 Health Dashboard</h1>
+        <div class="meta">
+            <div>
+                <strong>Overall Status:</strong>
+                <span class="status-badge status-{{ status }}">{{ status }}</span>
+            </div>
+            <div><strong>Timestamp:</strong> {{ timestamp }}</div>
+            <div><strong>Duration:</strong> {{ duration_ms }}ms</div>
+        </div>
+
+        <div class="services-grid">
+            {% for service_name, service_data in services.items %}
+            <div class="service-card">
+                <div class="service-header">
+                    <div class="service-name">{{ service_name|title }}</div>
+                    <div class="icon icon-{{ service_data.status }}"></div>
+                </div>
+
+                <div class="status-badge status-{{ service_data.status }}">
+                    {{ service_data.status }}
+                </div>
+
+                {% if service_data.details %}
+                <div class="service-details">
+                    {% for key, value in service_data.details.items %}
+                    <div class="detail-row">
+                        <span class="detail-label">{{ key|title }}:</span>
+                        <span class="detail-value">{{ value }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {% if service_data.error %}
+                <div class="error-message">
+                    <strong>Error:</strong> {{ service_data.error }}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script>
+        // Auto-refresh every 30 seconds
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
