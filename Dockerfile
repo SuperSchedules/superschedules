@@ -45,4 +45,9 @@ ENV DJANGO_SECRET_KEY=build-time-secret \
 RUN python manage.py collectstatic --noinput
 
 # Run Django with gunicorn + uvicorn workers (supports both Django and FastAPI)
-CMD ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--workers", "3"]
+CMD ["gunicorn", "config.asgi:application", \
+     "-k", "uvicorn.workers.UvicornWorker", \
+     "-b", "0.0.0.0:8000", \
+     "--workers", "3", \
+     "--access-logfile", "-", \
+     "--access-logformat", "%(t)s %(h)s \"%(r)s\" %(s)s %(b)s \"%(f)s\" \"%(a)s\""]
