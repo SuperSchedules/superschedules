@@ -199,7 +199,7 @@ start_chat_service() {
     local pid=$!
     echo "$pid" >> "$PID_FILE"
 
-    if wait_for_service "http://localhost:$CHAT_PORT/chat/health" "Chat Service"; then
+    if wait_for_service "http://localhost:$CHAT_PORT/api/v1/chat/health" "Chat Service"; then
         print_status "Chat Service" "success" "Running on http://localhost:$CHAT_PORT"
         return 0
     else

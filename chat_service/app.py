@@ -596,6 +596,7 @@ async def chat_message(
 ):
     """
     Non-streaming chat endpoint that returns the full response.
+    Collects all streaming chunks and returns them as a single response.
     """
     full_response = {
         "model": "A",
@@ -604,20 +605,40 @@ async def chat_message(
         "follow_up_questions": []
     }
 
-    async for chunk_str in stream_chat(request, jwt_claims):
-        if chunk_str.startswith("data: "):
-            try:
-                chunk_data = json.loads(chunk_str[6:])
-                if chunk_data.get("token"):
-                    full_response["response"] += chunk_data["token"]
-                if chunk_data.get("suggested_event_ids"):
-                    full_response["suggested_event_ids"] = chunk_data["suggested_event_ids"]
-                if chunk_data.get("follow_up_questions"):
-                    full_response["follow_up_questions"] = chunk_data["follow_up_questions"]
-            except json.JSONDecodeError:
-                pass
+    try:
+        # Get LLM service
+        llm_service = get_llm_service()
 
-    return full_response
+        # Get relevant events for context
+        relevant_events = await get_relevant_events(request.message)
+
+        # Use single model mode (default)
+        model_name = llm_service.primary_model
+        model_id = "A"
+
+        # Stream and collect response
+        model_generator = stream_model_response_with_retry(
+            llm_service,
+            request.message,
+            relevant_events,
+            model_name=model_name,
+            model_id=model_id,
+            max_retries=1
+        )
+
+        async for chunk in model_generator:
+            if chunk.token:
+                full_response["response"] += chunk.token
+            if chunk.suggested_event_ids:
+                full_response["suggested_event_ids"] = chunk.suggested_event_ids
+            if chunk.follow_up_questions:
+                full_response["follow_up_questions"] = chunk.follow_up_questions
+
+        return full_response
+
+    except Exception as e:
+        logger.error("Error in non-streaming chat: %s", e)
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 
 @app.get("/api/v1/chat/suggestions/")

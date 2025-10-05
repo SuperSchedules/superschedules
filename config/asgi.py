@@ -15,8 +15,12 @@ async def application(scope, receive, send):
     if scope["type"] == "http":
         path = scope.get("path", "")
         # Route /api/v1/chat/* to FastAPI (streaming and non-streaming chat)
+        # Route FastAPI docs and schema endpoints
         # All other /api/v1/* routes go to Django (events, auth, etc.)
-        if path.startswith("/api/v1/chat"):
+        if (path.startswith("/api/v1/chat") or
+            path == "/api/v1/chat-docs" or
+            path.startswith("/api/v1/chat-docs/") or
+            path == "/api/v1/chat-openapi.json"):
             await fastapi_app(scope, receive, send)
         else:
             await django_asgi_app(scope, receive, send)
