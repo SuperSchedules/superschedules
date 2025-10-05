@@ -313,3 +313,56 @@ PASSWORD_RESET_TIMEOUT=3600          # 1 hour
 - Reference file locations with `file_path:line_number` format
 - **Line length: 120 characters maximum** - Minimize line wrapping for better readability
 - Avoid emojis unless explicitly requested by user
+
+## Production Troubleshooting
+
+### Static Files 404 Issues
+**Symptoms**: Admin loads but CSS/JS fail with 404, Django returns "Not Found" for `/static/*` requests
+
+**Root Causes**:
+1. **Old Docker image without collectstatic** (most common):
+   - Check if staticfiles exist: `docker exec <container> ls -la /app/staticfiles/`
+   - Verify docker-compose.yml or user_data.sh uses `:latest` tag, not pinned commit hash
+   - If pinned, check that commit has `RUN python manage.py collectstatic --noinput` in Dockerfile
+
+2. **WhiteNoise misconfiguration**:
+   - Must use middleware ONLY (in settings.MIDDLEWARE), NOT wrapped in asgi.py
+   - Remove any `WhiteNoise(django_asgi_app, ...)` wrapper from asgi.py
+   - WhiteNoiseMiddleware should be second in MIDDLEWARE list (after SecurityMiddleware)
+
+3. **Multi-stage Docker build missing files**:
+   - Ensure staticfiles directory is in final stage, not just builder stage
+   - Check COPY commands copy staticfiles to runtime image
+
+**Debug Commands**:
+```bash
+# Check if staticfiles exist in running container
+docker exec <container> ls -la /app/staticfiles/
+
+# Check what image tag is running
+docker inspect <container> | grep "Image"
+
+# Test static file locally with same image
+docker run --rm -p 8888:8000 <image> &
+curl -I http://localhost:8888/static/admin/css/base.css
+```
+
+### ALB Health Check Failures
+
+**405 Method Not Allowed**:
+- ALB uses HEAD requests, Django Ninja's `@router.get()` only supports GET
+- Fix: Use `@router.api_operation(["GET", "HEAD"], "/live", auth=None)` instead
+- Affects: `/api/live`, `/api/ready` endpoints
+
+**400 Bad Request**:
+- `ALLOWED_HOSTS` doesn't include ALB's IP addresses
+- Quick fix: `ALLOWED_HOSTS = ['*']` in production settings
+- Better: Add ALB DNS name to ALLOWED_HOSTS
+
+### Health Dashboard Issues
+
+**Collector/Navigator showing red**:
+- Environment variables missing: `COLLECTOR_URL` and `NAVIGATOR_URL`
+- Default to localhost which doesn't work in Docker containers
+- Fix: Set `COLLECTOR_URL=http://collector:8001` and `NAVIGATOR_URL=http://navigator:8004` using Docker service names
+- Update in terraform/prod/templates/user_data.sh.tftpl Django environment section
