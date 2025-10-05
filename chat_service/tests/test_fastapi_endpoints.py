@@ -19,7 +19,7 @@ class FastAPIServiceTests(TestCase):
         self.client = TestClient(app)
 
     def test_health_check(self):
-        resp = self.client.get("/health")
+        resp = self.client.get("/api/v1/chat/health")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "healthy"
@@ -47,7 +47,7 @@ class FastAPIServiceTests(TestCase):
 
         # Stream the response and collect SSE lines
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             assert resp.status_code == 200
             for line in resp.iter_lines():
                 if not line:

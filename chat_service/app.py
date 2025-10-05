@@ -150,7 +150,7 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
         raise HTTPException(status_code=401, detail=f"Missing required claim: {str(e)}")
 
 
-@app.get("/chat/health")
+@app.get("/api/v1/chat/health")
 async def health_check():
     """Health check endpoint with database and LLM connectivity tests"""
     from django.db import connection
@@ -233,7 +233,7 @@ async def health_check():
     return health_status
 
 
-@app.post("/chat/stream")
+@app.post("/api/v1/chat/stream")
 async def stream_chat(
     request: ChatRequest,
     jwt_claims: JWTClaims = Depends(verify_jwt_token)
@@ -587,3 +587,48 @@ async def merge_async_generators(*generators):
         # Wait for all tasks to complete
         await asyncio.gather(*tasks, return_exceptions=True)
 
+
+
+@app.post("/api/v1/chat/")
+async def chat_message(
+    request: ChatRequest,
+    jwt_claims: JWTClaims = Depends(verify_jwt_token)
+):
+    """
+    Non-streaming chat endpoint that returns the full response.
+    """
+    full_response = {
+        "model": "A",
+        "response": "",
+        "suggested_event_ids": [],
+        "follow_up_questions": []
+    }
+
+    async for chunk_str in stream_chat(request, jwt_claims):
+        if chunk_str.startswith("data: "):
+            try:
+                chunk_data = json.loads(chunk_str[6:])
+                if chunk_data.get("token"):
+                    full_response["response"] += chunk_data["token"]
+                if chunk_data.get("suggested_event_ids"):
+                    full_response["suggested_event_ids"] = chunk_data["suggested_event_ids"]
+                if chunk_data.get("follow_up_questions"):
+                    full_response["follow_up_questions"] = chunk_data["follow_up_questions"]
+            except json.JSONDecodeError:
+                pass
+
+    return full_response
+
+
+@app.get("/api/v1/chat/suggestions/")
+async def chat_suggestions(
+    jwt_claims: JWTClaims = Depends(verify_jwt_token)
+):
+    """Get chat suggestions"""
+    return {
+        "suggestions": [
+            "What's happening this weekend?",
+            "Find me something to do tomorrow",
+            "Show me free events nearby"
+        ]
+    }

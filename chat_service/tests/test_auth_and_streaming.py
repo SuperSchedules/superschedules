@@ -30,7 +30,7 @@ class AuthAndStreamingTests(TestCase):
     def test_missing_auth_header(self):
         """Test missing Authorization header."""
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload)
+        response = self.client.post("/api/v1/chat/stream", json=payload)
         self.assertEqual(response.status_code, 401)
         self.assertIn("Missing or invalid", response.json()["detail"])
 
@@ -38,14 +38,14 @@ class AuthAndStreamingTests(TestCase):
         """Test invalid Authorization header format."""
         headers = {"Authorization": "InvalidFormat token"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
 
     def test_malformed_token(self):
         """Test malformed JWT token."""
         headers = {"Authorization": "Bearer invalid.token.here"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
 
     def test_expired_token(self):
@@ -59,7 +59,7 @@ class AuthAndStreamingTests(TestCase):
         
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
 
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
@@ -83,7 +83,7 @@ class AuthAndStreamingTests(TestCase):
         payload = {"message": "test", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -115,7 +115,7 @@ class AuthAndStreamingTests(TestCase):
         payload = {"message": "events in mars", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -175,7 +175,7 @@ class AuthAndStreamingTests(TestCase):
                 mock_service.generate_streaming_response = mock_gen
                 mock_llm.return_value = mock_service
                 
-                response = self.client.post("/chat/stream", json=payload, headers=headers)
+                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
                 self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_AUDIENCE='expected-audience')
@@ -203,7 +203,7 @@ class AuthAndStreamingTests(TestCase):
                 mock_service.generate_streaming_response = mock_gen
                 mock_llm.return_value = mock_service
                 
-                response = self.client.post("/chat/stream", json=payload, headers=headers)
+                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
                 self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_AUDIENCE='expected-audience')
@@ -218,7 +218,7 @@ class AuthAndStreamingTests(TestCase):
         
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
         self.assertIn("Invalid token audience", response.json()["detail"])
 
@@ -235,7 +235,7 @@ class AuthAndStreamingTests(TestCase):
         
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
         self.assertIn("Invalid token audience", response.json()["detail"])
 
@@ -264,7 +264,7 @@ class AuthAndStreamingTests(TestCase):
                 mock_service.generate_streaming_response = mock_gen
                 mock_llm.return_value = mock_service
                 
-                response = self.client.post("/chat/stream", json=payload, headers=headers)
+                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
                 self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_ISSUER='expected-issuer')
@@ -292,7 +292,7 @@ class AuthAndStreamingTests(TestCase):
                 mock_service.generate_streaming_response = mock_gen
                 mock_llm.return_value = mock_service
                 
-                response = self.client.post("/chat/stream", json=payload, headers=headers)
+                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
                 self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_ISSUER='expected-issuer')
@@ -307,6 +307,6 @@ class AuthAndStreamingTests(TestCase):
         
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        response = self.client.post("/chat/stream", json=payload, headers=headers)
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
         self.assertIn("Invalid token issuer", response.json()["detail"])

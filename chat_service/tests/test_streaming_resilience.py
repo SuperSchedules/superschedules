@@ -56,7 +56,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test timeout handling", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             # Set a reasonable timeout for the test
             import time
@@ -113,7 +113,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test malformed chunk handling", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -163,7 +163,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test health check failure", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -222,7 +222,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test retry mechanism", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -266,7 +266,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test complete failure", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)  # Should still return 200 (streaming starts)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
@@ -317,7 +317,7 @@ class StreamingResilienceTests(TestCase):
         payload = {"message": "test partial response", "single_model_mode": True}
         
         chunks = []
-        with self.client.stream("POST", "/chat/stream", json=payload, headers=headers) as resp:
+        with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
