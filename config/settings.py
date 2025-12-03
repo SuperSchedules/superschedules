@@ -148,11 +148,15 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
+    "https://admin.eventzombie.com",
+    "https://eventzombie.com",
+    "https://www.eventzombie.com",
 ]
 
 # Add ALB host dynamically if provided
 if alb_host := os.environ.get('ALB_HOST'):
     CORS_ALLOWED_ORIGINS.append(f"http://{alb_host}")
+    CORS_ALLOWED_ORIGINS.append(f"https://{alb_host}")
 
 # Custom test runner for pgvector support
 TEST_RUNNER = 'test_runner.PgVectorTestRunner'
