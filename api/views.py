@@ -44,7 +44,7 @@ class UserCreateSchema(Schema):
 class UserSchema(ModelSchema):
     class Meta:
         model = User
-        model_fields = ["id", "username", "email", "first_name", "last_name"]
+        fields = ["id", "username", "email", "first_name", "last_name"]
 
 
 router = Router()
@@ -66,7 +66,7 @@ class MessageSchema(Schema):
 class EventSchema(ModelSchema):
     class Meta:
         model = Event
-        model_fields = [
+        fields = [
             "id",
             "external_id",
             "title",
@@ -110,7 +110,7 @@ class EventUpdateSchema(Schema):
 class SourceSchema(ModelSchema):
     class Meta:
         model = Source
-        model_fields = [
+        fields = [
             "id",
             "name",
             "base_url",
@@ -130,7 +130,7 @@ class SourceCreateSchema(Schema):
 class SiteStrategySchema(ModelSchema):
     class Meta:
         model = SiteStrategy
-        model_fields = [
+        fields = [
             "domain",
             "best_selectors",
             "pagination_pattern",
@@ -182,7 +182,7 @@ class ScrapeResultSchema(Schema):
 class ScrapingJobSchema(ModelSchema):
     class Meta:
         model = ScrapingJob
-        model_fields = [
+        fields = [
             "id",
             "url",
             "domain",
