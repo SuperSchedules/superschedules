@@ -6,9 +6,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-# Allow all hosts - we're always behind ALB/proxy in production
-# and localhost for local development
-ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS configuration
+# Can be overridden with ALLOWED_HOSTS env var (comma-separated list)
+if allowed_hosts_env := os.environ.get('ALLOWED_HOSTS'):
+    ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_env.split(',')]
+else:
+    # Default hosts for development and production
+    ALLOWED_HOSTS = [
+        'localhost',
+        '127.0.0.1',
+        'eventzombie.com',
+        'www.eventzombie.com',
+        'api.eventzombie.com',
+        'admin.eventzombie.com',
+        'superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',  # For ALB health checks
+    ]
 
 INSTALLED_APPS = [
     'grappelli',
