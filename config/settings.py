@@ -188,6 +188,11 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5174",
 ]
 
+# Add ALB host to CSRF trusted origins if provided
+if alb_host := os.environ.get('ALB_HOST'):
+    CSRF_TRUSTED_ORIGINS.append(f"http://{alb_host}")
+    CSRF_TRUSTED_ORIGINS.append(f"https://{alb_host}")
+
 
 # Custom test runner for pgvector support
 TEST_RUNNER = 'test_runner.PgVectorTestRunner'
