@@ -42,7 +42,7 @@ class UserCreateSchema(Schema):
 
 
 class UserSchema(ModelSchema):
-    class Config:
+    class Meta:
         model = User
         model_fields = ["id", "username", "email", "first_name", "last_name"]
 
@@ -64,7 +64,7 @@ class MessageSchema(Schema):
 
 
 class EventSchema(ModelSchema):
-    class Config:
+    class Meta:
         model = Event
         model_fields = [
             "id",
@@ -108,7 +108,7 @@ class EventUpdateSchema(Schema):
 
 
 class SourceSchema(ModelSchema):
-    class Config:
+    class Meta:
         model = Source
         model_fields = [
             "id",
@@ -128,7 +128,7 @@ class SourceCreateSchema(Schema):
 
 
 class SiteStrategySchema(ModelSchema):
-    class Config:
+    class Meta:
         model = SiteStrategy
         model_fields = [
             "domain",
@@ -180,7 +180,7 @@ class ScrapeResultSchema(Schema):
 
 
 class ScrapingJobSchema(ModelSchema):
-    class Config:
+    class Meta:
         model = ScrapingJob
         model_fields = [
             "id",
