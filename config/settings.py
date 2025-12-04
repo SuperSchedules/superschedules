@@ -22,6 +22,15 @@ else:
         'superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',  # For ALB health checks
     ]
 
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://eventzombie.com",
+    "https://www.eventzombie.com",
+    "https://admin.eventzombie.com",
+    "http://localhost:5173",
+    "http://localhost:5174",
+]
+
 INSTALLED_APPS = [
     'grappelli',
     'django.contrib.admin',
@@ -169,6 +178,15 @@ CORS_ALLOWED_ORIGINS = [
 if alb_host := os.environ.get('ALB_HOST'):
     CORS_ALLOWED_ORIGINS.append(f"http://{alb_host}")
     CORS_ALLOWED_ORIGINS.append(f"https://{alb_host}")
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://eventzombie.com",
+    "https://www.eventzombie.com",
+    "https://admin.eventzombie.com",
+    "http://localhost:5173",
+    "http://localhost:5174",
+]
+
 
 # Custom test runner for pgvector support
 TEST_RUNNER = 'test_runner.PgVectorTestRunner'
