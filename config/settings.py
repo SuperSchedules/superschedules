@@ -11,16 +11,10 @@ DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 if allowed_hosts_env := os.environ.get('ALLOWED_HOSTS'):
     ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_env.split(',')]
 else:
-    # Default hosts for development and production
-    ALLOWED_HOSTS = [
-        'localhost',
-        '127.0.0.1',
-        'eventzombie.com',
-        'www.eventzombie.com',
-        'api.eventzombie.com',
-        'admin.eventzombie.com',
-        'superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',  # For ALB health checks
-    ]
+    # Allow all hosts since we're behind an ALB that acts as the security perimeter
+    # The ALB only forwards requests to approved domains (eventzombie.com, api.eventzombie.com, etc.)
+    # This also allows ALB health checks which come from internal IPs
+    ALLOWED_HOSTS = ['*']
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
