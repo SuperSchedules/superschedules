@@ -22,6 +22,7 @@ else:
         'superschedules-prod-alb-920320173.us-east-1.elb.amazonaws.com',  # For ALB health checks
     ]
 
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 CSRF_TRUSTED_ORIGINS = [
     "https://eventzombie.com",
