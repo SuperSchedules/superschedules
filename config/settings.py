@@ -22,6 +22,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://eventzombie.com",
     "https://www.eventzombie.com",
     "https://admin.eventzombie.com",
+    "https://api.eventzombie.com",
     "http://localhost:5173",
     "http://localhost:5174",
 ]
@@ -167,6 +168,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://admin.eventzombie.com",
     "https://eventzombie.com",
     "https://www.eventzombie.com",
+    "https://api.eventzombie.com",
 ]
 
 # Add ALB host dynamically if provided
@@ -178,6 +180,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://eventzombie.com",
     "https://www.eventzombie.com",
     "https://admin.eventzombie.com",
+    "https://api.eventzombie.com",
     "http://localhost:5173",
     "http://localhost:5174",
 ]

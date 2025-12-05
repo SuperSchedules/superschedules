@@ -223,22 +223,22 @@ python manage.py update_embeddings
 
 ### Running Tests
 ```bash
+# IMPORTANT: Always activate virtualenv before running tests
 # Django tests (uses pgvector-aware test runner)
-# --buffer flag suppresses stdout/stderr for clean output
-python manage.py test --settings=config.test_settings --buffer
+source .venv/bin/activate && python manage.py test --settings=config.test_settings --buffer
 
 # Target specific modules
-python manage.py test api --settings=config.test_settings --buffer
-python manage.py test events --settings=config.test_settings --buffer
+source .venv/bin/activate && python manage.py test api --settings=config.test_settings --buffer
+source .venv/bin/activate && python manage.py test events --settings=config.test_settings --buffer
 
 # View logs during tests (for debugging)
-LOG_LEVEL=INFO python manage.py test --settings=config.test_settings
+source .venv/bin/activate && LOG_LEVEL=INFO python manage.py test --settings=config.test_settings
 
-# FastAPI tests
-pytest chat_service/tests/
+# FastAPI tests (requires DJANGO_SETTINGS_MODULE env var)
+source .venv/bin/activate && DJANGO_SETTINGS_MODULE=config.test_settings pytest chat_service/tests/ -v
 
-# API service tests
-pytest api/tests/
+# API service tests (requires DJANGO_SETTINGS_MODULE env var)
+source .venv/bin/activate && DJANGO_SETTINGS_MODULE=config.test_settings pytest api/tests/ -v
 ```
 
 ## API Endpoints

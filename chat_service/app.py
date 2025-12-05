@@ -39,10 +39,23 @@ app = FastAPI(
 )
 
 app.include_router(debug_routes.router)
-# CORS middleware
+# CORS middleware - allow production and development origins
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://www.eventzombie.com",
+    "https://eventzombie.com",
+    "https://admin.eventzombie.com",
+    "https://api.eventzombie.com",
+]
+
+# Add ALB host dynamically if provided (for load balancer health checks)
+if alb_host := os.environ.get('ALB_HOST'):
+    allowed_origins.extend([f"http://{alb_host}", f"https://{alb_host}"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Frontend URLs
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

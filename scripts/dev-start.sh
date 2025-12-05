@@ -19,6 +19,22 @@ FRONTEND_DIR="/home/gregk/superschedules_frontend"
 COLLECTOR_DIR="/home/gregk/superschedules_collector"
 NAVIGATOR_DIR="/home/gregk/superschedules_navigator"
 
+# Parse command-line arguments
+SHOW_LOGS=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --show-logs)
+            SHOW_LOGS=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--show-logs]"
+            exit 1
+            ;;
+    esac
+done
+
 # Service ports
 DJANGO_PORT=8000
 CHAT_PORT=8002
@@ -28,6 +44,10 @@ FRONTEND_PORT=5173
 
 # PID file for cleanup
 PID_FILE="/tmp/superschedules-dev.pids"
+
+# Log directory
+LOG_DIR="/tmp/superschedules-logs"
+mkdir -p "$LOG_DIR"
 
 # Cleanup function
 cleanup() {
@@ -176,7 +196,7 @@ start_django() {
     python manage.py migrate --noinput >/dev/null 2>&1 || true
 
     # Start Django server
-    python manage.py runserver $DJANGO_PORT >/dev/null 2>&1 &
+    python manage.py runserver $DJANGO_PORT >> "$LOG_DIR/django.log" 2>&1 &
     local pid=$!
     echo "$pid" >> "$PID_FILE"
 
@@ -222,7 +242,7 @@ start_collector() {
         return 1
     fi
 
-    .venv/bin/python start_api.py --port $COLLECTOR_PORT >/dev/null 2>&1 &
+    .venv/bin/python start_api.py --port $COLLECTOR_PORT >> "$LOG_DIR/collector.log" 2>&1 &
     local pid=$!
     echo "$pid" >> "$PID_FILE"
 
@@ -305,6 +325,9 @@ print_dashboard() {
     echo -e "  Chat Service:      http://localhost:$CHAT_PORT"
     echo -e "  Collector Service: http://localhost:$COLLECTOR_PORT"
     echo -e "  Navigator Service: http://localhost:$NAVIGATOR_PORT"
+    echo -e "\n${BLUE}📋 Service logs: $LOG_DIR/${NC}"
+    echo -e "  tail -f $LOG_DIR/django.log"
+    echo -e "  tail -f $LOG_DIR/collector.log"
     echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}\n"
 }
 
@@ -326,10 +349,16 @@ main() {
 
     print_dashboard
 
-    # Keep script running
-    while true; do
-        sleep 1
-    done
+    # Show logs if requested
+    if [[ "$SHOW_LOGS" == "true" ]]; then
+        echo -e "${BLUE}📄 Showing logs (Django + Collector):${NC}\n"
+        tail -f "$LOG_DIR/django.log" "$LOG_DIR/collector.log"
+    else
+        # Keep script running
+        while true; do
+            sleep 1
+        done
+    fi
 }
 
 # Run main function
