@@ -784,9 +784,6 @@ def bulk_submit_urls_service(request, payload: BatchRequestSchema):
     Bulk submit URLs using service token (for administrative bulk loading).
     Uses first superuser as the submitter since service tokens don't have users.
     """
-    from django.contrib.auth import get_user_model
-
-    User = get_user_model()
     admin_user = User.objects.filter(is_superuser=True).first()
 
     if not admin_user:
