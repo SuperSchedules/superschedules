@@ -778,6 +778,67 @@ def bulk_submit_urls(request, payload: BatchRequestSchema):
     return {"submitted": len(jobs), "job_ids": [j.id for j in jobs]}
 
 
+@router.post("/queue/bulk-submit-service", auth=ServiceTokenAuth())
+def bulk_submit_urls_service(request, payload: BatchRequestSchema):
+    """
+    Bulk submit URLs using service token (for administrative bulk loading).
+    Uses first superuser as the submitter since service tokens don't have users.
+    """
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    admin_user = User.objects.filter(is_superuser=True).first()
+
+    if not admin_user:
+        raise HttpError(500, "No admin user found")
+
+    jobs = []
+    skipped = 0
+
+    for url in payload.urls:
+        parsed = urlparse(url)
+
+        # Check for existing pending/processing job
+        existing_job = ScrapingJob.objects.filter(
+            url=url,
+            status__in=['pending', 'processing']
+        ).first()
+
+        if existing_job:
+            jobs.append(existing_job)
+            skipped += 1
+            continue
+
+        # Create or get source
+        source, _ = Source.objects.get_or_create(
+            base_url=url,
+            defaults={
+                'user': admin_user,
+                'status': Source.Status.NOT_RUN,
+                'name': parsed.netloc  # Use domain as default name
+            }
+        )
+
+        # Create new job with lower priority for bulk
+        job = ScrapingJob.objects.create(
+            url=url,
+            domain=parsed.netloc,
+            status='pending',
+            submitted_by=admin_user,
+            source=source,
+            priority=7  # Lower priority for bulk
+        )
+        jobs.append(job)
+
+    logger.info(f"Service bulk submit: {len(jobs)} jobs total ({len(jobs)-skipped} new, {skipped} existing)")
+    return {
+        "submitted": len(jobs),
+        "new_jobs": len(jobs) - skipped,
+        "existing_jobs": skipped,
+        "job_ids": [j.id for j in jobs]
+    }
+
+
 # Chat API Schemas and Endpoints
 
 # A/B testing endpoint removed - functionality moved to streaming chat service
