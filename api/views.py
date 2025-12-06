@@ -456,12 +456,12 @@ def submit_scrape(request, payload: ScrapeRequestSchema):
         logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
         return existing_job
 
-    # Check if URL was recently processed successfully (within 24 hours)
+    # Check if URL was recently processed successfully (within 14 days)
     from datetime import timedelta
     recent_success = ScrapingJob.objects.filter(
         url=payload.url,
         status='completed',
-        completed_at__gte=timezone.now() - timedelta(hours=24)
+        completed_at__gte=timezone.now() - timedelta(days=14)
     ).first()
 
     if recent_success:
@@ -615,12 +615,12 @@ def submit_url_to_queue(request, payload: ScrapeRequestSchema):
         logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
         return existing_job
 
-    # Check if URL was recently processed successfully (within 24 hours)
+    # Check if URL was recently processed successfully (within 14 days)
     from datetime import timedelta
     recent_success = ScrapingJob.objects.filter(
         url=payload.url,
         status='completed',
-        completed_at__gte=timezone.now() - timedelta(hours=24)
+        completed_at__gte=timezone.now() - timedelta(days=14)
     ).first()
 
     if recent_success:
