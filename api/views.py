@@ -442,16 +442,50 @@ def override_site_strategy(request, domain: str, payload: SiteStrategyUpdateSche
 
 @router.post("/scrape", auth=JWTAuth(), response=ScrapingJobSchema)
 def submit_scrape(request, payload: ScrapeRequestSchema):
+    """Submit URL for asynchronous processing (frontend endpoint)."""
     parsed = urlparse(payload.url)
     domain = parsed.netloc
-    strategy = SiteStrategy.objects.filter(domain=domain).first()
+
+    # Check if there's already a pending or processing job for this URL
+    existing_job = ScrapingJob.objects.filter(
+        url=payload.url,
+        status__in=['pending', 'processing']
+    ).first()
+
+    if existing_job:
+        logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
+        return existing_job
+
+    # Check if URL was recently processed successfully (within 24 hours)
+    from datetime import timedelta
+    recent_success = ScrapingJob.objects.filter(
+        url=payload.url,
+        status='completed',
+        completed_at__gte=timezone.now() - timedelta(hours=24)
+    ).first()
+
+    if recent_success:
+        logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
+        return recent_success
+
+    # Create or get source
+    source, _ = Source.objects.get_or_create(
+        base_url=payload.url,
+        defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
+    )
+
+    # Create new job for queue
     job = ScrapingJob.objects.create(
         url=payload.url,
         domain=domain,
-        strategy_used=",".join(strategy.best_selectors) if strategy else "",
-        lambda_request_id=str(uuid4()),
+        status='pending',
         submitted_by=request.user,
+        source=source,
+        priority=5,  # Normal priority for manual submissions
+        lambda_request_id=str(uuid4()),
     )
+
+    logger.info(f"Job {job.id} queued for {payload.url}")
     return job
 
 
@@ -510,21 +544,45 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
 
 @router.post("/scrape/batch/", auth=JWTAuth(), response=BatchResponseSchema)
 def submit_batch(request, payload: BatchRequestSchema):
+    """Submit multiple URLs for batch processing."""
     batch = ScrapeBatch.objects.create(submitted_by=request.user)
     job_ids: List[int] = []
+
     for url in payload.urls:
         parsed = urlparse(url)
         domain = parsed.netloc
-        strategy = SiteStrategy.objects.filter(domain=domain).first()
+
+        # Check for existing pending/processing job
+        existing_job = ScrapingJob.objects.filter(
+            url=url,
+            status__in=['pending', 'processing']
+        ).first()
+
+        if existing_job:
+            batch.jobs.add(existing_job)
+            job_ids.append(existing_job.id)
+            continue
+
+        # Create or get source
+        source, _ = Source.objects.get_or_create(
+            base_url=url,
+            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
+        )
+
+        # Create new job with lower priority for batch
         job = ScrapingJob.objects.create(
             url=url,
             domain=domain,
-            strategy_used=",".join(strategy.best_selectors) if strategy else "",
-            lambda_request_id=str(uuid4()),
+            status='pending',
             submitted_by=request.user,
+            source=source,
+            priority=7,  # Lower priority for batch submissions
+            lambda_request_id=str(uuid4()),
         )
         batch.jobs.add(job)
         job_ids.append(job.id)
+
+    logger.info(f"Batch {batch.id}: {len(job_ids)} jobs queued")
     return {"batch_id": batch.id, "job_ids": job_ids}
 
 
@@ -547,11 +605,35 @@ def submit_url_to_queue(request, payload: ScrapeRequestSchema):
     parsed = urlparse(payload.url)
     domain = parsed.netloc
 
+    # Check if there's already a pending or processing job for this URL
+    existing_job = ScrapingJob.objects.filter(
+        url=payload.url,
+        status__in=['pending', 'processing']
+    ).first()
+
+    if existing_job:
+        logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
+        return existing_job
+
+    # Check if URL was recently processed successfully (within 24 hours)
+    from datetime import timedelta
+    recent_success = ScrapingJob.objects.filter(
+        url=payload.url,
+        status='completed',
+        completed_at__gte=timezone.now() - timedelta(hours=24)
+    ).first()
+
+    if recent_success:
+        logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
+        return recent_success
+
+    # Create or get source
     source, _ = Source.objects.get_or_create(
         base_url=payload.url,
         defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
     )
 
+    # Create new job
     job = ScrapingJob.objects.create(
         url=payload.url,
         domain=domain,
@@ -664,11 +746,24 @@ def bulk_submit_urls(request, payload: BatchRequestSchema):
     jobs = []
     for url in payload.urls:
         parsed = urlparse(url)
+
+        # Check for existing pending/processing job
+        existing_job = ScrapingJob.objects.filter(
+            url=url,
+            status__in=['pending', 'processing']
+        ).first()
+
+        if existing_job:
+            jobs.append(existing_job)
+            continue
+
+        # Create or get source
         source, _ = Source.objects.get_or_create(
             base_url=url,
-            defaults={'user': request.user}
+            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
         )
 
+        # Create new job with lower priority for bulk
         job = ScrapingJob.objects.create(
             url=url,
             domain=parsed.netloc,
@@ -679,6 +774,7 @@ def bulk_submit_urls(request, payload: BatchRequestSchema):
         )
         jobs.append(job)
 
+    logger.info(f"Bulk submit: {len(jobs)} jobs queued")
     return {"submitted": len(jobs), "job_ids": [j.id for j in jobs]}
 
 
