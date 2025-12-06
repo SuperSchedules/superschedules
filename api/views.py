@@ -187,12 +187,21 @@ class ScrapingJobSchema(ModelSchema):
             "url",
             "domain",
             "status",
+            "priority",
             "strategy_used",
             "events_found",
             "pages_processed",
             "processing_time",
             "error_message",
             "lambda_request_id",
+            "worker_type",
+            "estimated_cost",
+            "extraction_method",
+            "confidence_score",
+            "locked_by",
+            "locked_at",
+            "retry_count",
+            "max_retries",
             "submitted_by",
             "created_at",
             "completed_at",
@@ -527,6 +536,150 @@ def submit_batch(request, payload: BatchRequestSchema):
 def batch_status(request, batch_id: int):
     batch = get_object_or_404(ScrapeBatch, id=batch_id)
     return list(batch.jobs.all())
+
+
+# Job Queue Management Endpoints
+
+
+@router.post("/queue/submit", auth=JWTAuth(), response=ScrapingJobSchema)
+def submit_url_to_queue(request, payload: ScrapeRequestSchema):
+    """Submit URL for asynchronous processing."""
+    parsed = urlparse(payload.url)
+    domain = parsed.netloc
+
+    source, _ = Source.objects.get_or_create(
+        base_url=payload.url,
+        defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
+    )
+
+    job = ScrapingJob.objects.create(
+        url=payload.url,
+        domain=domain,
+        status='pending',
+        submitted_by=request.user,
+        source=source,
+        priority=5
+    )
+
+    logger.info(f"Job {job.id} queued for {payload.url}")
+    return job
+
+
+@router.get("/queue/next", auth=ServiceTokenAuth(), response=ScrapingJobSchema)
+def get_next_job(request, worker_id: str = Query(...)):
+    """Workers call this to get next job (atomic claim with SELECT FOR UPDATE)."""
+    from django.db import transaction
+
+    with transaction.atomic():
+        job = ScrapingJob.objects.select_for_update(skip_locked=True).filter(
+            status='pending'
+        ).order_by('priority', 'created_at').first()
+
+        if not job:
+            raise HttpError(404, "No pending jobs available")
+
+        job.status = 'processing'
+        job.locked_at = timezone.now()
+        job.locked_by = worker_id
+        job.save()
+
+        logger.info(f"Job {job.id} claimed by worker {worker_id}")
+        return job
+
+
+@router.post("/queue/{job_id}/complete", auth=ServiceTokenAuth())
+def complete_job(request, job_id: int, payload: ScrapeResultSchema):
+    """Worker reports job completion with events."""
+    job = get_object_or_404(ScrapingJob, id=job_id)
+
+    source = job.source
+    if not source:
+        # Create source if not already linked
+        parsed = urlparse(job.url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        source, _ = Source.objects.get_or_create(
+            base_url=base_url,
+            defaults={'user': job.submitted_by, 'status': Source.Status.NOT_RUN}
+        )
+        job.source = source
+
+    created_ids = []
+    for event_data in payload.events:
+        event = Event.create_with_schema_org_data({
+            'external_id': event_data.external_id,
+            'title': event_data.title,
+            'description': event_data.description,
+            'location': event_data.location,
+            'start_time': event_data.start_time,
+            'end_time': event_data.end_time,
+            'url': event_data.url,
+            'tags': event_data.metadata_tags or [],
+        }, source)
+        created_ids.append(event.id)
+
+    job.status = 'completed' if payload.success else 'failed'
+    job.events_found = len(created_ids)
+    job.processing_time = payload.processing_time
+    job.error_message = payload.error_message or ''
+    job.completed_at = timezone.now()
+    job.save()
+
+    source.status = Source.Status.PROCESSED
+    source.last_run_at = timezone.now()
+    source.save()
+
+    logger.info(f"Job {job_id} completed: {len(created_ids)} events")
+    return {"created_event_ids": created_ids}
+
+
+@router.get("/queue/status", auth=JWTAuth())
+def queue_status(request):
+    """Get queue statistics."""
+    from django.db.models import Count, Q
+
+    stats = ScrapingJob.objects.aggregate(
+        pending=Count('id', filter=Q(status='pending')),
+        processing=Count('id', filter=Q(status='processing')),
+        completed_today=Count('id', filter=Q(
+            status='completed',
+            completed_at__gte=timezone.now() - timedelta(days=1)
+        )),
+        failed_today=Count('id', filter=Q(
+            status='failed',
+            completed_at__gte=timezone.now() - timedelta(days=1)
+        ))
+    )
+
+    return {
+        "queue_depth": stats['pending'],
+        "processing": stats['processing'],
+        "completed_24h": stats['completed_today'],
+        "failed_24h": stats['failed_today']
+    }
+
+
+@router.post("/queue/bulk-submit", auth=JWTAuth())
+def bulk_submit_urls(request, payload: BatchRequestSchema):
+    """Submit multiple URLs for processing (daily re-scrape use case)."""
+    jobs = []
+    for url in payload.urls:
+        parsed = urlparse(url)
+        source, _ = Source.objects.get_or_create(
+            base_url=url,
+            defaults={'user': request.user}
+        )
+
+        job = ScrapingJob.objects.create(
+            url=url,
+            domain=parsed.netloc,
+            status='pending',
+            submitted_by=request.user,
+            source=source,
+            priority=7  # Lower priority for bulk
+        )
+        jobs.append(job)
+
+    return {"submitted": len(jobs), "job_ids": [j.id for j in jobs]}
 
 
 # Chat API Schemas and Endpoints

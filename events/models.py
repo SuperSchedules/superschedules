@@ -104,6 +104,30 @@ class ScrapingJob(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    # Queue management fields
+    priority = models.IntegerField(default=5)  # 1=highest, 10=lowest
+    retry_count = models.PositiveIntegerField(default=0)
+    max_retries = models.PositiveIntegerField(default=3)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_by = models.CharField(max_length=100, blank=True)
+    source = models.ForeignKey(
+        Source, null=True, blank=True, on_delete=models.SET_NULL, related_name='scraping_jobs'
+    )
+
+    # Cost tracking
+    worker_type = models.CharField(max_length=20, blank=True)  # 'local', 'spot_t3_small'
+    estimated_cost = models.DecimalField(max_digits=8, decimal_places=6, null=True, blank=True)
+
+    # Collector metadata
+    extraction_method = models.CharField(max_length=50, blank=True)  # 'rss', 'localist', 'llm'
+    confidence_score = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['status', 'priority', 'created_at']),
+            models.Index(fields=['locked_at']),
+        ]
+
     def __str__(self):
         return f"{self.url} ({self.status})"
 
