@@ -865,68 +865,20 @@ def _extract_follow_up_questions(response: str) -> List[str]:
 
 
 def _trigger_collection(source):
-    """Trigger event collection for a source via collector API."""
-    collector_url = getattr(settings, 'COLLECTOR_URL', 'http://localhost:8001')
-    
-    try:
-        # Call collector API to extract events
-        response = requests.post(
-            f"{collector_url}/extract",
-            json={
-                "url": source.base_url,
-                "extraction_hints": {
-                    "content_selectors": source.site_strategy.best_selectors if source.site_strategy else None,
-                    "additional_hints": {}
-                }
-            },
-            timeout=180  # Allow time for iframe + calendar pagination
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success') and data.get('events'):
-                # Create events in database
-                created_count = 0
-                for event_data in data['events']:
-                    try:
-                        # Parse datetime strings
-                        start_time = datetime.fromisoformat(event_data['start_time'].replace('Z', '+00:00'))
-                        end_time = None
-                        if event_data.get('end_time'):
-                            end_time = datetime.fromisoformat(event_data['end_time'].replace('Z', '+00:00'))
-                        
-                        # Create event using Schema.org-aware method
-                        Event.create_with_schema_org_data({
-                            'external_id': event_data['external_id'],
-                            'title': event_data['title'],
-                            'description': event_data['description'],
-                            'location': event_data['location'],  # This can be Schema.org Place object
-                            'start_time': start_time,
-                            'end_time': end_time,
-                            'url': event_data.get('url'),
-                            'tags': event_data.get('tags', []),
-                            'organizer': event_data.get('organizer', ''),
-                            'event_status': event_data.get('event_status', ''),
-                            'event_attendance_mode': event_data.get('event_attendance_mode', ''),
-                        }, source)
-                        created_count += 1
-                    except Exception as e:
-                        logger.error("Failed to create event: %s", e)
-                        continue
+    """Queue a scraping job for the source."""
+    from urllib.parse import urlparse
 
-                # Update source status
-                source.status = Source.Status.PROCESSED
-                source.last_run_at = timezone.now()
-                source.save()
+    parsed = urlparse(source.base_url)
+    domain = parsed.netloc
 
-                logger.info("Successfully created %d events for source %d", created_count, source.id)
-            else:
-                source.status = Source.Status.PROCESSED  # No events found but processed
-                source.last_run_at = timezone.now()
-                source.save()
-                logger.info("No events found for source %d", source.id)
-        else:
-            logger.error("Collector API returned error: %d - %s", response.status_code, response.text)
+    # Create a scraping job with priority 5 (default for user-submitted URLs)
+    job = ScrapingJob.objects.create(
+        url=source.base_url,
+        domain=domain,
+        status='pending',
+        submitted_by=source.user,
+        source=source,
+        priority=5
+    )
 
-    except requests.exceptions.RequestException as e:
-        logger.error("Failed to connect to collector API: %s", e)
+    logger.info(f"Created scraping job {job.id} for source {source.id} ({source.base_url})")
