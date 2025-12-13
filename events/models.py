@@ -158,17 +158,42 @@ class Event(models.Model):
     
     # Enhanced location fields with Schema.org Place support
     place = models.ForeignKey(
-        Place, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        Place,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        help_text="Rich Schema.org Place object with full venue details"
+        help_text="Legacy Schema.org Place object (kept for backward compatibility)"
     )
     location = models.CharField(
         max_length=255,
-        help_text="Fallback location string for backward compatibility"
+        help_text="Raw location string from collector (e.g., 'Waltham Room')"
     )
-    
+
+    # New structured venue system
+    venue = models.ForeignKey(
+        'venues.Venue',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='events',
+        help_text="Structured venue with normalized address components"
+    )
+    room_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Room/space within venue (e.g., 'Children's Room')"
+    )
+    raw_place_json = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Original Schema.org Place JSON-LD for re-parsing"
+    )
+    raw_location_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Full location_data from collector for debugging"
+    )
+
     # Additional Schema.org Event fields
     organizer = models.CharField(
         max_length=200, 
@@ -201,83 +226,120 @@ class Event(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     def get_location_string(self) -> str:
-        """Get location as string for backward compatibility."""
+        """Get location as string for display."""
         try:
+            # Prefer new venue system
+            if self.venue:
+                if self.room_name:
+                    return f"{self.room_name}, {self.venue.name}"
+                return str(self.venue)
+            # Fallback to legacy place
             if self.place:
                 return str(self.place)
-        except:
-            # Fallback for events without place relationship
+        except Exception:
             pass
         return self.location or ""
-    
+
     def get_full_address(self) -> str:
         """Get full address for geocoding and location searches."""
         try:
+            # Prefer new venue system
+            if self.venue:
+                return self.venue.get_full_address()
+            # Fallback to legacy place
             if self.place and self.place.address:
                 return self.place.address
-        except:
-            # Fallback for events without place relationship
+        except Exception:
             pass
         return ""
-    
+
     def get_city(self) -> str:
         """Extract city from location for geographic searches."""
         try:
+            # Prefer new venue system
+            if self.venue:
+                return self.venue.city
+            # Fallback to legacy place
             if self.place:
                 return self.place.get_city()
-        except:
-            # Fallback for events without place relationship
+        except Exception:
             pass
         return ""
-    
+
     def get_location_search_text(self) -> str:
         """Get comprehensive location text for RAG search."""
         try:
+            # Prefer new venue system
+            if self.venue:
+                parts = [self.venue.name, self.venue.get_full_address()]
+                if self.room_name:
+                    parts.insert(0, self.room_name)
+                return " ".join(filter(None, parts))
+            # Fallback to legacy place
             if self.place:
                 return self.place.get_search_text()
-        except:
-            # Fallback for events without place relationship
+        except Exception:
             pass
         return self.location or ""
     
     @classmethod
     def create_with_schema_org_data(cls, event_data: dict, source):
         """
-        Create Event with rich Schema.org data including Place objects.
-        
+        Create Event with Venue normalization from collector's location_data.
+
         Args:
-            event_data: Event data from collector with potential Schema.org location
+            event_data: Event data from collector with location_data dict
             source: Source instance
-            
+
         Returns:
             Event instance
         """
-        # Extract location data and create Place if it's Schema.org format
-        location_data = event_data.get('location')
-        place_obj = None
+        from venues.extraction import normalize_venue_data, get_or_create_venue
+        from urllib.parse import urlparse
+
+        # Extract source domain for venue tracking
+        source_domain = ""
+        if source and source.base_url:
+            try:
+                source_domain = urlparse(source.base_url).netloc
+            except Exception:
+                pass
+
+        # Get location_data from collector (required format)
+        location_data = event_data.get('location_data')
+        raw_place_json = location_data.get('raw_place_json') if location_data else None
+
+        # Normalize venue data using the pipeline
+        normalized = normalize_venue_data(location_data=location_data, place_json=raw_place_json)
+
+        # Get or create Venue
+        venue_obj = None
+        room_name = ""
+        if normalized.get('venue_name') and normalized.get('city'):
+            venue_obj, _ = get_or_create_venue(normalized, source_domain)
+            room_name = normalized.get('room_name', '')
+
+        # Build location text for display (from venue or raw location string)
         location_text = ""
-        
-        if isinstance(location_data, dict) and (location_data.get('type') == 'Place' or location_data.get('@type') == 'Place'):
-            # Create Place from Schema.org data
-            place_obj = Place.create_from_schema_org(location_data)
-            location_text = str(place_obj) if place_obj else ""
-        elif isinstance(location_data, list):
-            # Handle array of Place objects
-            if location_data and isinstance(location_data[0], dict):
-                place_obj = Place.create_from_schema_org(location_data[0])
-                location_text = str(place_obj) if place_obj else ""
-        else:
-            # Simple string location
-            location_text = str(location_data) if location_data else ""
-        
-        # Create event with place reference
+        if venue_obj:
+            location_text = str(venue_obj)
+        elif location_data:
+            location_text = location_data.get('raw_location_string', '')
+
+        # Create event with venue reference
         return cls.objects.create(
             source=source,
             external_id=event_data.get('external_id', ''),
             title=event_data.get('title', ''),
             description=event_data.get('description', ''),
-            place=place_obj,
+            # Venue system
+            venue=venue_obj,
+            room_name=room_name,
+            raw_place_json=raw_place_json,
+            raw_location_data=location_data,
+            # Legacy location field (for display/search compatibility)
             location=location_text,
+            # Schema.org fields
             organizer=event_data.get('organizer', ''),
             event_status=event_data.get('event_status', ''),
             event_attendance_mode=event_data.get('event_attendance_mode', ''),
@@ -332,7 +394,7 @@ def update_event_embedding(sender, instance, created, update_fields=None, **kwar
         should_update = False
     else:
         # Specific fields updated - check if any affect embedding content
-        embedding_fields = {'title', 'description', 'location', 'start_time'}
+        embedding_fields = {'title', 'description', 'location', 'start_time', 'venue', 'room_name'}
         should_update = bool(embedding_fields.intersection(update_fields))
     
     if should_update:

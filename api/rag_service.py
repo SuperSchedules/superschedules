@@ -250,6 +250,7 @@ class EventRAGService:
                         'title': clean_html_content(event.title),
                         'description': clean_html_content(event.description),
                         'location': clean_html_content(event.get_location_string()),  # Display location
+                        'room_name': event.room_name or '',  # Room within venue
                         'full_address': event.get_full_address(),  # Rich address data
                         'city': event.get_city(),  # Extracted city
                         'organizer': event.organizer,  # Schema.org organizer
@@ -302,6 +303,7 @@ class EventRAGService:
                 'title': clean_html_content(event.title),
                 'description': clean_html_content(event.description),
                 'location': clean_html_content(event.get_location_string()),
+                'room_name': event.room_name or '',
                 'full_address': event.get_full_address(),
                 'city': event.get_city(),
                 'organizer': event.organizer,

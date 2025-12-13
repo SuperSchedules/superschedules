@@ -484,6 +484,60 @@ class TestRealRAGQueries(RAGServiceTest):
                 self.assertIsNotNone(day_of_week)
 
 
+class TestContextEventsVenueData(RAGServiceTest):
+    """Test that context events include venue and room_name data."""
+
+    def setUp(self):
+        super().setUp()
+        self.rag_service = EventRAGService()
+
+        # Mock the sentence transformer
+        self.mock_model = MagicMock()
+        self.rag_service.model = self.mock_model
+
+    def test_context_events_include_room_name(self):
+        """Test that get_context_events returns room_name field."""
+        from venues.models import Venue
+        from model_bakery import baker
+
+        # Create venue and event with room_name
+        venue = baker.make(
+            Venue,
+            name="Newton Free Library",
+            city="Newton",
+            state="MA",
+        )
+        event_with_room = baker.make(
+            Event,
+            title="Story Time in Children's Room",
+            description="Fun for kids",
+            venue=venue,
+            room_name="Children's Room",
+            start_time=timezone.now() + timedelta(days=1),
+        )
+
+        with patch.object(self.rag_service, 'semantic_search') as mock_search:
+            mock_search.return_value = [(event_with_room, 0.85)]
+
+            context_events = self.rag_service.get_context_events("story time for kids")
+
+            self.assertEqual(len(context_events), 1)
+            self.assertIn('room_name', context_events[0])
+            self.assertEqual(context_events[0]['room_name'], "Children's Room")
+
+    def test_context_events_room_name_empty_when_not_set(self):
+        """Test that room_name is empty string when event has no room."""
+        with patch.object(self.rag_service, 'semantic_search') as mock_search:
+            mock_search.return_value = [(self.baby_storytime, 0.85)]
+
+            context_events = self.rag_service.get_context_events("baby activities")
+
+            self.assertEqual(len(context_events), 1)
+            self.assertIn('room_name', context_events[0])
+            # room_name should be empty string or None for events without room
+            self.assertIn(context_events[0]['room_name'], ['', None])
+
+
 class TestEmbeddingManagement(RAGServiceTest):
     """Test embedding creation and management."""
     

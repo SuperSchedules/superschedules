@@ -2,6 +2,9 @@
 
 AI-powered local events discovery platform. Users ask: *"Activities for 3-5 year olds in Newton, next 3 hours"* and get intelligent recommendations via RAG-powered chat.
 
+## In-Progress Work: Venue System
+**READ FIRST:** See `VENUE_IMPLEMENTATION_HANDOFF.md` for details on the new Venue model and location normalization system. Next step is updating the chat LLM / event API so the frontend uses the new structured venue data.
+
 ## Multi-Repository Architecture
 
 This is the **main backend repository** in a 5-repo system:
@@ -41,10 +44,11 @@ This is the **main backend repository** in a 5-repo system:
 - **Admin**: Grappelli interface
 
 ### Data Models
-- **Event**: Title, description, location (Schema.org Place), start/end times, vector embedding
+- **Event**: Title, description, venue FK, room_name, start/end times, vector embedding
+- **Venue**: Structured address (name, street, city, state, zip), geocoding, deduplication
 - **Source**: Event source URLs with site strategies
 - **SiteStrategy**: Domain-specific scraping patterns and success rates
-- **Place**: Schema.org Place objects for rich venue data with geocoding
+- **Place**: (Legacy) Schema.org Place objects - kept for backward compatibility
 - **ScrapingJob**: Async job tracking for collector integration
 
 ## Development Guidelines

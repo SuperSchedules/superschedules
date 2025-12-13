@@ -26,6 +26,7 @@ from events.models import (
     ScrapingJob,
     ScrapeBatch,
 )
+from venues.models import Venue
 from api.auth import ServiceTokenAuth
 from api.llm_service import get_llm_service, create_event_discovery_prompt
 
@@ -63,7 +64,16 @@ class MessageSchema(Schema):
     message: str
 
 
+class VenueSchema(ModelSchema):
+    class Meta:
+        model = Venue
+        fields = ["id", "name", "street_address", "city", "state", "postal_code"]
+
+
 class EventSchema(ModelSchema):
+    venue: VenueSchema | None = None
+    room_name: str = ""
+
     class Meta:
         model = Event
         fields = [
@@ -76,7 +86,14 @@ class EventSchema(ModelSchema):
             "end_time",
             "url",
             "metadata_tags",
+            "room_name",
         ]
+
+    @staticmethod
+    def resolve_venue(obj: Event) -> VenueSchema | None:
+        if obj.venue:
+            return VenueSchema.from_orm(obj.venue)
+        return None
 
 
 class EventCreateSchema(Schema):
@@ -160,6 +177,7 @@ class ScrapeResultEventSchema(Schema):
     title: str
     description: str
     location: str
+    location_data: dict | None = None  # Structured location from collector
     start_time: datetime
     end_time: datetime | None = None
     url: str | None = None
@@ -692,6 +710,7 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
             'title': event_data.title,
             'description': event_data.description,
             'location': event_data.location,
+            'location_data': event_data.location_data,  # Structured location from collector
             'start_time': event_data.start_time,
             'end_time': event_data.end_time,
             'url': event_data.url,
