@@ -67,7 +67,7 @@ class MessageSchema(Schema):
 class VenueSchema(ModelSchema):
     class Meta:
         model = Venue
-        fields = ["id", "name", "street_address", "city", "state", "postal_code"]
+        fields = ["id", "name", "street_address", "city", "state", "postal_code", "latitude", "longitude"]
 
 
 class EventSchema(ModelSchema):
