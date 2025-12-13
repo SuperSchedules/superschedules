@@ -147,28 +147,31 @@ class EventRAGService:
             end_date = timezone.now() + timedelta(days=time_filter_days)
             queryset = queryset.filter(start_time__lte=end_date)
         
-        # Apply location filter
+        # Apply location filter (search venue name or room_name)
         if location_filter:
-            queryset = queryset.filter(location__icontains=location_filter)
-        
+            queryset = queryset.filter(
+                Q(venue__name__icontains=location_filter) | Q(room_name__icontains=location_filter)
+            )
+
         # Perform vector similarity search using raw SQL (Django ORM CosineDistance has issues)
         from django.db import connection
-        
+
         # Build WHERE conditions for the filters
         where_conditions = ["embedding IS NOT NULL"]
         params = []
-        
+
         if only_future_events:
             where_conditions.append("start_time > %s")
             params.append(timezone.now())
-            
+
         if time_filter_days and time_filter_days > 0:
             end_date = timezone.now() + timedelta(days=time_filter_days)
             where_conditions.append("start_time <= %s")
             params.append(end_date)
-            
+
         if location_filter:
-            where_conditions.append("location ILIKE %s")
+            where_conditions.append("(venue_id IN (SELECT id FROM venues_venue WHERE name ILIKE %s) OR room_name ILIKE %s)")
+            params.append(f"%{location_filter}%")
             params.append(f"%{location_filter}%")
         
         where_clause = " AND ".join(where_conditions)

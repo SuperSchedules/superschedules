@@ -11,60 +11,81 @@ from model_bakery import baker
 from unittest.mock import patch, MagicMock
 
 from events.models import Event
+from venues.models import Venue
 from api.rag_service import EventRAGService, get_rag_service, clean_html_content
 
 
 class RAGServiceTest(TestCase):
     """Test RAG service functionality."""
-    
+
     def setUp(self):
         """Create test events with various content types."""
+        # Create venues for events
+        self.childrens_room_venue = baker.make(
+            Venue,
+            name="Children's Room Library",
+            city="Needham",
+            state="MA"
+        )
+        self.community_room_venue = baker.make(
+            Venue,
+            name="Library Community Room",
+            city="Needham",
+            state="MA"
+        )
+        self.virtual_venue = baker.make(
+            Venue,
+            name="Virtual",
+            city="Online",
+            state=""
+        )
+
         # Future event with clean content
         self.baby_storytime = baker.make(
             Event,
             title="Budding Bookworms",
             description="A storytime just for infants from newborn to not-yet walking and their caregivers. Rhymes, stories, fingerplays, and bounces in the storytime room.",
-            location="Inside, Children's Room",
+            venue=self.childrens_room_venue,
+            room_name="Children's Room",
             start_time=timezone.now() + timedelta(days=1, hours=10),  # Tomorrow 10 AM
             embedding=None  # Will be set in tests
         )
-        
+
         # Future event with HTML entities (like real Needham data)
         self.dance_class = baker.make(
             Event,
             title="Come Dance with Charles River Ballet Academy!",
             description="Join Ms. Emily from Needham&#039;s classical ballet school for children aged 2 and up with a caregiver.&amp;hellip;&lt;a href=&quot;https://example.com&quot;&gt;Learn More&lt;/a&gt;",
-            location="Library Community Room", 
+            venue=self.community_room_venue,
             start_time=timezone.now() + timedelta(days=1, hours=11),  # Tomorrow 11 AM
             embedding=None
         )
-        
+
         # Future teen event
         self.teen_space = baker.make(
             Event,
             title="Teen Study Space",
             description="Teen Study Space in the Library's Community Room on the 1st Floor",
-            location="Library Community Room",
+            venue=self.community_room_venue,
             start_time=timezone.now() + timedelta(days=1, hours=14, minutes=30),  # Tomorrow 2:30 PM
             embedding=None
         )
-        
+
         # Past event (should be filtered out)
         self.past_event = baker.make(
             Event,
             title="Past Event",
             description="This event already happened",
-            location="Somewhere",
             start_time=timezone.now() - timedelta(days=1),  # Yesterday
             embedding=None
         )
-        
+
         # Virtual event
         self.virtual_event = baker.make(
             Event,
             title="Virtual Workshop",
             description="Online discussion and insights from alumni",
-            location="Virtual",
+            venue=self.virtual_venue,
             start_time=timezone.now() + timedelta(days=2, hours=15),  # Day after tomorrow 3 PM
             embedding=None
         )
@@ -100,12 +121,12 @@ class TestVectorizationContent(RAGServiceTest):
         self.assertIn(expected_month, vectorized_text)
     
     def test_create_event_text_handles_missing_fields(self):
-        """Test vectorized text handles events with missing description/location."""
+        """Test vectorized text handles events with missing description/venue."""
         minimal_event = baker.make(
             Event,
             title="Minimal Event",
             description="",  # Empty description
-            location="",     # Empty location
+            venue=None,      # No venue
             start_time=timezone.now() + timedelta(days=1)
         )
         
@@ -246,7 +267,7 @@ class TestSemanticSearch(RAGServiceTest):
         
         returned_events = [event for event, score in results]
         for event in returned_events:
-            self.assertIn("Library Community Room", event.location)
+            self.assertIn("Library Community Room", event.get_location_string())
     
     def test_get_context_events_applies_similarity_threshold(self):
         """Test that context events filtering by similarity threshold works."""
@@ -335,7 +356,7 @@ class TestRAGQueryScenarios(RAGServiceTest):
         self.assertTrue(len(context_events) >= 1)
         top_event = context_events[0]
         self.assertEqual(top_event['title'], "Virtual Workshop")
-        self.assertEqual(top_event['location'], "Virtual")
+        self.assertIn("Virtual", top_event['location'])
     
     def test_context_events_cleans_html_in_output(self):
         """Test that context events clean HTML entities in output."""
@@ -435,7 +456,7 @@ class TestRealRAGQueries(RAGServiceTest):
         
         # Should only return events in Library Community Room
         for event, score in results:
-            self.assertIn("Library Community Room", event.location)
+            self.assertIn("Library Community Room", event.get_location_string())
     
     def test_similarity_score_distribution(self):
         """Test that similarity scores make sense for different queries."""
@@ -528,14 +549,15 @@ class TestContextEventsVenueData(RAGServiceTest):
     def test_context_events_room_name_empty_when_not_set(self):
         """Test that room_name is empty string when event has no room."""
         with patch.object(self.rag_service, 'semantic_search') as mock_search:
-            mock_search.return_value = [(self.baby_storytime, 0.85)]
+            # dance_class has no room_name set
+            mock_search.return_value = [(self.dance_class, 0.85)]
 
-            context_events = self.rag_service.get_context_events("baby activities")
+            context_events = self.rag_service.get_context_events("dance activities")
 
             self.assertEqual(len(context_events), 1)
             self.assertIn('room_name', context_events[0])
-            # room_name should be empty string or None for events without room
-            self.assertIn(context_events[0]['room_name'], ['', None])
+            # room_name should be empty string for events without room
+            self.assertEqual(context_events[0]['room_name'], '')
 
 
 class TestEmbeddingManagement(RAGServiceTest):

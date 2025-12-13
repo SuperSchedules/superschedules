@@ -8,6 +8,7 @@ import logging
 from asgiref.sync import async_to_sync
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 from django.conf import settings
 from django.core import signing
@@ -73,6 +74,7 @@ class VenueSchema(ModelSchema):
 class EventSchema(ModelSchema):
     venue: VenueSchema | None = None
     room_name: str = ""
+    location: str = ""  # Computed from venue for backward compatibility
 
     class Meta:
         model = Event
@@ -81,7 +83,6 @@ class EventSchema(ModelSchema):
             "external_id",
             "title",
             "description",
-            "location",
             "start_time",
             "end_time",
             "url",
@@ -95,13 +96,17 @@ class EventSchema(ModelSchema):
             return VenueSchema.from_orm(obj.venue)
         return None
 
+    @staticmethod
+    def resolve_location(obj: Event) -> str:
+        return obj.get_location_string()
+
 
 class EventCreateSchema(Schema):
     source_id: int | None = None
     external_id: str
     title: str
     description: str
-    location: str | dict  # Support both string and Schema.org Place object
+    location_data: dict | None = None  # Structured location for venue creation
     start_time: datetime
     end_time: datetime | None = None
     url: str | None = None
@@ -176,7 +181,7 @@ class ScrapeResultEventSchema(Schema):
     external_id: str
     title: str
     description: str
-    location: str
+    location: str = ""  # Deprecated, kept for backward compatibility
     location_data: dict | None = None  # Structured location from collector
     start_time: datetime
     end_time: datetime | None = None
@@ -384,7 +389,7 @@ def create_event(request, payload: EventCreateSchema):
         'external_id': payload.external_id,
         'title': payload.title,
         'description': payload.description,
-        'location': payload.location,  # Can be string or Schema.org Place
+        'location_data': payload.location_data,
         'start_time': payload.start_time,
         'end_time': payload.end_time,
         'url': payload.url,
@@ -533,13 +538,33 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
         source.save(update_fields=["site_strategy"])
     created_ids = []
     for ev in payload.events:
+        # Handle venue creation from location_data if provided
+        venue = None
+        room_name = ""
+        if ev.location_data:
+            loc_data = ev.location_data
+            venue_name = loc_data.get('venue_name', '')
+            city = loc_data.get('city', '')
+            if venue_name and city:
+                venue, _ = Venue.objects.get_or_create(
+                    name=venue_name,
+                    city=city,
+                    defaults={
+                        'street_address': loc_data.get('street_address', ''),
+                        'state': loc_data.get('state', ''),
+                        'postal_code': loc_data.get('postal_code', ''),
+                    }
+                )
+            room_name = loc_data.get('room_name', '')
+
         event = Event.objects.create(
             source=source,
             scraping_job=job,
             external_id=ev.external_id,
             title=ev.title,
             description=ev.description,
-            location=ev.location,
+            venue=venue,
+            room_name=room_name,
             start_time=ev.start_time,
             end_time=ev.end_time,
             url=ev.url,
@@ -709,8 +734,7 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
             'external_id': event_data.external_id,
             'title': event_data.title,
             'description': event_data.description,
-            'location': event_data.location,
-            'location_data': event_data.location_data,  # Structured location from collector
+            'location_data': event_data.location_data,
             'start_time': event_data.start_time,
             'end_time': event_data.end_time,
             'url': event_data.url,
@@ -879,7 +903,7 @@ def _get_relevant_event_ids(ages: List[int] | None, location: str | None, timefr
     
     # Apply basic filtering (in production, this would be much more sophisticated)
     if location:
-        qs = qs.filter(location__icontains=location)
+        qs = qs.filter(Q(venue__city__icontains=location) | Q(venue__name__icontains=location))
     
     if timeframe == 'today':
         start_date = timezone.now().date()

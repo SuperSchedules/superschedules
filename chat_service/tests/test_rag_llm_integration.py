@@ -14,6 +14,7 @@ from model_bakery import baker
 from datetime import datetime, timedelta
 
 from events.models import Event, Source
+from venues.models import Venue
 from chat_service.app import get_relevant_events, stream_model_response
 from api.llm_service import create_event_discovery_prompt
 
@@ -24,13 +25,19 @@ class RAGLLMIntegrationTest(TestCase):
     def setUp(self):
         """Create test events that should be found by RAG"""
         source = baker.make(Source, name="Needham Library")
-        
+
+        # Create venues
+        library_venue = baker.make(Venue, name="Needham Public Library", city="Needham", state="MA")
+        common_venue = baker.make(Venue, name="Needham Town Common", city="Needham", state="MA")
+        center_venue = baker.make(Venue, name="Needham Community Center", city="Needham", state="MA")
+
         # Create events that should be found for "needham with kids" query
         self.needham_events = [
             baker.make(Event,
                 title="Kids Story Time at Needham Library",
                 description="Interactive storytime for children ages 3-6 with crafts and songs",
-                location="Needham Public Library Children's Room", 
+                venue=library_venue,
+                room_name="Children's Room",
                 start_time=datetime.now() + timedelta(days=2),
                 source=source,
                 embedding=[0.1] * 384  # Mock embedding
@@ -38,15 +45,15 @@ class RAGLLMIntegrationTest(TestCase):
             baker.make(Event,
                 title="Family Fun Day in Needham",
                 description="Outdoor activities for families with children including games and snacks",
-                location="Needham Town Common",
-                start_time=datetime.now() + timedelta(days=3), 
+                venue=common_venue,
+                start_time=datetime.now() + timedelta(days=3),
                 source=source,
                 embedding=[0.2] * 384
             ),
             baker.make(Event,
-                title="Children's Art Workshop Needham", 
+                title="Children's Art Workshop Needham",
                 description="Creative art class for kids aged 5-10 with all supplies provided",
-                location="Needham Community Center",
+                venue=center_venue,
                 start_time=datetime.now() + timedelta(days=4),
                 source=source,
                 embedding=[0.3] * 384
@@ -245,34 +252,35 @@ class PromptFlowDebugTest(TestCase):
     
     def test_actual_rag_flow_integration(self):
         """Test the complete RAG flow as used in the chat service"""
-        
+
         # Create test events for RAG to find
         source = baker.make(Source, name="Test Source")
+        venue = baker.make(Venue, name="Needham Community Center", city="Needham", state="MA")
         test_events = [
             baker.make(Event,
                 title="Needham Kids Activity",
                 description="Fun activities for children in Needham",
-                location="Needham Community Center", 
+                venue=venue,
                 start_time=datetime.now() + timedelta(days=1),
                 source=source,
                 embedding=[0.5] * 384  # Mock embedding that should match
             )
         ]
-        
+
         query = "activities for kids in needham"
-        
+
         # Mock RAG service to return our test events
         with patch('api.rag_service.get_rag_service') as mock_rag_service:
             mock_rag = MagicMock()
             mock_rag_service.return_value = mock_rag
-            
+
             # Mock RAG to return events (simulates working RAG)
             mock_rag.get_context_events.return_value = [
                 {
                     'id': event.id,
                     'title': event.title,
                     'description': event.description,
-                    'location': event.location,
+                    'location': event.get_location_string(),
                     'start_time': event.start_time.isoformat(),
                     'url': event.url,
                     'similarity_score': 0.6

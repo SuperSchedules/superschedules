@@ -7,9 +7,6 @@ from django.contrib.postgres.indexes import GinIndex
 import secrets
 import logging
 
-# Import Place model for Schema.org location support
-from .place_models import Place
-
 logger = logging.getLogger(__name__)
 
 class Source(models.Model):
@@ -155,21 +152,8 @@ class Event(models.Model):
     external_id = models.CharField(max_length=255)
     title = models.CharField(max_length=255)
     description = models.TextField()
-    
-    # Enhanced location fields with Schema.org Place support
-    place = models.ForeignKey(
-        Place,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        help_text="Legacy Schema.org Place object (kept for backward compatibility)"
-    )
-    location = models.CharField(
-        max_length=255,
-        help_text="Raw location string from collector (e.g., 'Waltham Room')"
-    )
 
-    # New structured venue system
+    # Structured venue system
     venue = models.ForeignKey(
         'venues.Venue',
         on_delete=models.SET_NULL,
@@ -227,60 +211,32 @@ class Event(models.Model):
     
     def get_location_string(self) -> str:
         """Get location as string for display."""
-        try:
-            # Prefer new venue system
-            if self.venue:
-                if self.room_name:
-                    return f"{self.room_name}, {self.venue.name}"
-                return str(self.venue)
-            # Fallback to legacy place
-            if self.place:
-                return str(self.place)
-        except Exception:
-            pass
-        return self.location or ""
+        if self.venue:
+            if self.room_name:
+                return f"{self.room_name}, {self.venue.name}"
+            return str(self.venue)
+        return ""
 
     def get_full_address(self) -> str:
         """Get full address for geocoding and location searches."""
-        try:
-            # Prefer new venue system
-            if self.venue:
-                return self.venue.get_full_address()
-            # Fallback to legacy place
-            if self.place and self.place.address:
-                return self.place.address
-        except Exception:
-            pass
+        if self.venue:
+            return self.venue.get_full_address()
         return ""
 
     def get_city(self) -> str:
         """Extract city from location for geographic searches."""
-        try:
-            # Prefer new venue system
-            if self.venue:
-                return self.venue.city
-            # Fallback to legacy place
-            if self.place:
-                return self.place.get_city()
-        except Exception:
-            pass
+        if self.venue:
+            return self.venue.city
         return ""
 
     def get_location_search_text(self) -> str:
         """Get comprehensive location text for RAG search."""
-        try:
-            # Prefer new venue system
-            if self.venue:
-                parts = [self.venue.name, self.venue.get_full_address()]
-                if self.room_name:
-                    parts.insert(0, self.room_name)
-                return " ".join(filter(None, parts))
-            # Fallback to legacy place
-            if self.place:
-                return self.place.get_search_text()
-        except Exception:
-            pass
-        return self.location or ""
+        if self.venue:
+            parts = [self.venue.name, self.venue.get_full_address()]
+            if self.room_name:
+                parts.insert(0, self.room_name)
+            return " ".join(filter(None, parts))
+        return ""
     
     @classmethod
     def create_with_schema_org_data(cls, event_data: dict, source):
@@ -319,27 +275,16 @@ class Event(models.Model):
             venue_obj, _ = get_or_create_venue(normalized, source_domain)
             room_name = normalized.get('room_name', '')
 
-        # Build location text for display (from venue or raw location string)
-        location_text = ""
-        if venue_obj:
-            location_text = str(venue_obj)
-        elif location_data:
-            location_text = location_data.get('raw_location_string', '')
-
         # Create event with venue reference
         return cls.objects.create(
             source=source,
             external_id=event_data.get('external_id', ''),
             title=event_data.get('title', ''),
             description=event_data.get('description', ''),
-            # Venue system
             venue=venue_obj,
             room_name=room_name,
             raw_place_json=raw_place_json,
             raw_location_data=location_data,
-            # Legacy location field (for display/search compatibility)
-            location=location_text,
-            # Schema.org fields
             organizer=event_data.get('organizer', ''),
             event_status=event_data.get('event_status', ''),
             event_attendance_mode=event_data.get('event_attendance_mode', ''),
@@ -394,7 +339,7 @@ def update_event_embedding(sender, instance, created, update_fields=None, **kwar
         should_update = False
     else:
         # Specific fields updated - check if any affect embedding content
-        embedding_fields = {'title', 'description', 'location', 'start_time', 'venue', 'room_name'}
+        embedding_fields = {'title', 'description', 'start_time', 'venue', 'room_name'}
         should_update = bool(embedding_fields.intersection(update_fields))
     
     if should_update:

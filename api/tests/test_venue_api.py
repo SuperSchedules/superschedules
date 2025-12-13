@@ -74,7 +74,6 @@ class EventSchemaVenueTest(TestCase):
             source=self.source,
             venue=self.venue,
             room_name="Children's Room",
-            location="Children's Room, Newton Free Library",
             start_time=timezone.now() + timedelta(days=1),
         )
         self.event_without_venue = baker.make(
@@ -84,7 +83,6 @@ class EventSchemaVenueTest(TestCase):
             source=self.source,
             venue=None,
             room_name="",
-            location="Online",
             start_time=timezone.now() + timedelta(days=2),
         )
 

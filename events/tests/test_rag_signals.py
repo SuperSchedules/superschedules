@@ -39,7 +39,6 @@ class RagSignalTests(TestCase):
             external_id="test_001",
             title="Kids Soccer Practice",
             description="Soccer for ages 5-10",
-            location="Newton Park",
             start_time=datetime(2024, 9, 1, 10, 0, tzinfo=timezone.utc)
         )
         
@@ -124,20 +123,20 @@ class RagSignalTests(TestCase):
             event_ids=[event.id]
         )
     
-    def test_update_location_triggers_embedding_regeneration(self):
-        """Test that updating location field triggers embedding regeneration."""
+    def test_update_room_name_triggers_embedding_regeneration(self):
+        """Test that updating room_name field triggers embedding regeneration."""
         event = baker.make(
             Event,
             source=self.test_source,
-            location="Original Location",
+            room_name="Original Room",
             embedding=[0.1] * 384
         )
-        
+
         self.mock_rag_service.reset_mock()
-        
-        event.location = "Updated Location"
-        event.save(update_fields=['location'])
-        
+
+        event.room_name = "Updated Room"
+        event.save(update_fields=['room_name'])
+
         self.mock_rag_service.update_event_embeddings.assert_called_once_with(
             event_ids=[event.id]
         )
@@ -230,7 +229,6 @@ class RagSignalTests(TestCase):
             external_id="test_error",
             title="Test Event",
             description="Test description",
-            location="Test Location",
             start_time=datetime(2024, 9, 1, 10, 0, tzinfo=timezone.utc)
         )
         

@@ -7,6 +7,7 @@ from django.utils import timezone
 from datetime import timedelta
 from unittest.mock import Mock
 from ninja.testing import TestClient
+from ninja_jwt.tokens import AccessToken
 from model_bakery import baker
 
 from api.views import router
@@ -22,6 +23,7 @@ class QueueEndpointsTests(TestCase):
         """Set up test fixtures."""
         self.client = TestClient(router)
         self.user = baker.make(User, username="testuser@example.com")
+        self.jwt_token = str(AccessToken.for_user(self.user))
         self.service_token = baker.make(ServiceToken, name="Test Worker Token")
 
     def _create_auth_request(self, user=None):
@@ -80,7 +82,7 @@ class QueueEndpointsTests(TestCase):
         # Worker claims job
         response = self.client.get(
             '/queue/next?worker_id=test-worker-1',
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -124,7 +126,7 @@ class QueueEndpointsTests(TestCase):
         # Should get highest priority (lowest number)
         response = self.client.get(
             '/queue/next?worker_id=test-worker-1',
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -135,7 +137,7 @@ class QueueEndpointsTests(TestCase):
         """Test getting next job when queue is empty."""
         response = self.client.get(
             '/queue/next?worker_id=test-worker-1',
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
 
         self.assertEqual(response.status_code, 404)
@@ -187,7 +189,7 @@ class QueueEndpointsTests(TestCase):
                 'pages_processed': 1,
                 'processing_time': 2.5
             },
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -220,7 +222,7 @@ class QueueEndpointsTests(TestCase):
                 'processing_time': 1.0,
                 'error_message': 'Connection timeout'
             },
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -335,7 +337,7 @@ class QueueEndpointsTests(TestCase):
         # Worker 1 claims job
         response1 = self.client.get(
             '/queue/next?worker_id=worker-1',
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
         self.assertEqual(response1.status_code, 200)
         self.assertEqual(response1.json()['id'], job.id)
@@ -343,7 +345,7 @@ class QueueEndpointsTests(TestCase):
         # Worker 2 tries to claim (should get 404 - no jobs available)
         response2 = self.client.get(
             '/queue/next?worker_id=worker-2',
-            headers={'Authorization': f'Token {self.service_token.token}'}
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
         self.assertEqual(response2.status_code, 404)
 
@@ -354,7 +356,7 @@ class QueueEndpointsTests(TestCase):
         response = self.client.post(
             '/scrape',
             json={'url': 'https://example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -385,7 +387,7 @@ class QueueEndpointsTests(TestCase):
         response = self.client.post(
             '/scrape',
             json={'url': 'https://example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -410,7 +412,7 @@ class QueueEndpointsTests(TestCase):
         response = self.client.post(
             '/scrape',
             json={'url': 'https://example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -435,7 +437,7 @@ class QueueEndpointsTests(TestCase):
         response = self.client.post(
             '/scrape',
             json={'url': 'https://example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -445,22 +447,22 @@ class QueueEndpointsTests(TestCase):
         self.assertEqual(data['id'], recent_job.id)
         self.assertEqual(ScrapingJob.objects.count(), 1)
 
-    def test_scrape_endpoint_creates_new_after_24h(self):
-        """Test that submitting URL after 24h creates new job."""
-        # Create old completed job (more than 24 hours ago)
+    def test_scrape_endpoint_creates_new_after_14_days(self):
+        """Test that submitting URL after 14 days creates new job."""
+        # Create old completed job (more than 14 days ago)
         old_job = baker.make(
             ScrapingJob,
             url='https://example.com/events',
             domain='example.com',
             status='completed',
             submitted_by=self.user,
-            completed_at=timezone.now() - timedelta(hours=25)
+            completed_at=timezone.now() - timedelta(days=15)
         )
 
         response = self.client.post(
             '/scrape',
             json={'url': 'https://example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -484,7 +486,7 @@ class QueueEndpointsTests(TestCase):
         response = self.client.post(
             '/queue/submit',
             json={'url': 'https://library.example.com/events'},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)
@@ -512,7 +514,7 @@ class QueueEndpointsTests(TestCase):
                 'https://example.com/events2',  # New
                 'https://example.com/events3'   # New
             ]},
-            user=self.user
+            headers={'Authorization': f'Bearer {self.jwt_token}'}
         )
 
         self.assertEqual(response.status_code, 200)

@@ -103,10 +103,8 @@ class EventAdmin(admin.ModelAdmin):
     readonly_fields = ('external_id', 'created_at', 'updated_at')
     
     def get_location_display(self, obj):
-        """Display location with Place info if available."""
-        if obj.place:
-            return f"{obj.location} ({obj.place.name})" if obj.location != obj.place.name else obj.place.name
-        return obj.location
+        """Display location from venue."""
+        return obj.get_location_string() or "—"
     get_location_display.short_description = 'Location'
 
 
