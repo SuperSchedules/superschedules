@@ -287,8 +287,12 @@ LOGGING = {
 # Celery Configuration
 # Using PostgreSQL as broker via SQLAlchemy - suitable for idempotent bookkeeping tasks
 # Build broker URL from Django database settings
+from urllib.parse import quote_plus
+
 if DB_HOST:
-    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+    # URL-encode password to handle special characters (@, :, /, + etc.)
+    encoded_password = quote_plus(DB_PASSWORD)
+    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
 else:
     # Local development with peer auth
     CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}@/{DB_NAME}'
