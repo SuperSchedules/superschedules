@@ -56,13 +56,20 @@ class TestGeocodeVenue(TestCase):
     """Tests for the geocode_venue function."""
 
     def setUp(self):
+        # Create venue with coordinates to prevent signal from triggering geocoding
+        # Then clear coordinates for testing
         self.venue = Venue.objects.create(
             name="Waltham Public Library",
             street_address="735 Main Street",
             city="Waltham",
             state="MA",
-            postal_code="02451"
+            postal_code="02451",
+            latitude=Decimal('42.376605'),
+            longitude=Decimal('-71.245155')
         )
+        # Clear coordinates after creation to test geocoding
+        Venue.objects.filter(id=self.venue.id).update(latitude=None, longitude=None)
+        self.venue.refresh_from_db()
 
     @patch('venues.geocoding.geocode_address')
     def test_geocode_venue_updates_coordinates(self, mock_geocode):
@@ -164,11 +171,11 @@ class TestQueueGeocoding(TestCase):
 
 
 class TestVenueGeocodingSignal(TestCase):
-    """Tests for automatic geocoding on venue save."""
+    """Tests for automatic geocoding on venue save via Celery."""
 
-    @patch('venues.geocoding.queue_geocoding')
-    def test_new_venue_triggers_geocoding(self, mock_queue):
-        """Should queue geocoding when new venue is created without coordinates."""
+    @patch('venues.tasks.geocode_venue_task.delay')
+    def test_new_venue_triggers_geocoding(self, mock_delay):
+        """Should queue Celery task when new venue is created without coordinates."""
         venue = Venue.objects.create(
             name="Newton Free Library",
             street_address="330 Homer Street",
@@ -177,10 +184,10 @@ class TestVenueGeocodingSignal(TestCase):
             postal_code="02459"
         )
 
-        mock_queue.assert_called_once_with(venue.id)
+        mock_delay.assert_called_once_with(venue.id)
 
-    @patch('venues.geocoding.queue_geocoding')
-    def test_venue_with_coordinates_skips_geocoding(self, mock_queue):
+    @patch('venues.tasks.geocode_venue_task.delay')
+    def test_venue_with_coordinates_skips_geocoding(self, mock_delay):
         """Should not queue geocoding when venue has coordinates."""
         venue = Venue.objects.create(
             name="Boston Library",
@@ -190,21 +197,21 @@ class TestVenueGeocodingSignal(TestCase):
             longitude=Decimal('-71.0589')
         )
 
-        mock_queue.assert_not_called()
+        mock_delay.assert_not_called()
 
-    @patch('venues.geocoding.queue_geocoding')
-    def test_venue_update_does_not_retrigger_geocoding(self, mock_queue):
+    @patch('venues.tasks.geocode_venue_task.delay')
+    def test_venue_update_does_not_retrigger_geocoding(self, mock_delay):
         """Should not re-geocode on subsequent saves."""
         venue = Venue.objects.create(
             name="Cambridge Library",
             city="Cambridge",
             state="MA"
         )
-        mock_queue.reset_mock()
+        mock_delay.reset_mock()
 
         # Update venue
         venue.street_address = "123 Main St"
         venue.save()
 
-        # Should not queue again (already attempted or has coords)
-        mock_queue.assert_not_called()
+        # Should not queue again (only triggers on create)
+        mock_delay.assert_not_called()

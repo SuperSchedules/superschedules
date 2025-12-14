@@ -39,6 +39,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'ninja',
+    'django_celery_beat',
+    'django_celery_results',
     'events',
     'venues',
     'api',
@@ -249,7 +251,21 @@ LOGGING = {
             'formatter': 'verbose',
         },
     },
+    'root': {
+        'handlers': ['console'],
+        'level': os.environ.get('LOG_LEVEL', 'INFO'),
+    },
     'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': os.environ.get('LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
         'api': {
             'handlers': ['console'],
             'level': os.environ.get('LOG_LEVEL', 'INFO'),
@@ -266,4 +282,37 @@ LOGGING = {
             'propagate': False,
         },
     },
+}
+
+# Celery Configuration
+# Using database as broker (django-db backend) - suitable for idempotent bookkeeping tasks
+CELERY_BROKER_URL = 'django-db'
+CELERY_RESULT_BACKEND = 'django-db'
+
+# Celery Beat scheduler uses database
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Task serialization
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# Task settings
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes max per task
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # Soft limit at 25 minutes
+
+# Result expiration (7 days)
+CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 7
+
+# Worker settings
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # One task at a time for rate-limited APIs
+CELERY_WORKER_CONCURRENCY = 2  # Conservative for database-backed broker
+
+# Task routes for prioritization
+CELERY_TASK_ROUTES = {
+    'events.tasks.generate_embedding': {'queue': 'embeddings'},
+    'venues.tasks.geocode_venue': {'queue': 'geocoding'},
+    'events.tasks.process_scraping_job': {'queue': 'scraping'},
+    'events.tasks.*': {'queue': 'default'},
 }

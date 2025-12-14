@@ -318,16 +318,17 @@ class ServiceToken(models.Model):
 
 
 @receiver(post_save, sender=Event)
-def update_event_embedding(sender, instance, created, update_fields=None, **kwargs):
+def queue_event_embedding(sender, instance, created, update_fields=None, **kwargs):
     """
-    Auto-generate RAG embedding when Event is created or updated.
-    
+    Queue RAG embedding generation when Event is created or updated.
+
+    Uses Celery task for async processing instead of synchronous generation.
     Uses update_fields to intelligently detect when embedding needs regeneration:
     - Always generate for new events
     - For updates, only regenerate if content fields changed or no embedding exists
     """
     should_update = False
-    
+
     if created:
         should_update = True
     elif instance.embedding is None:
@@ -341,15 +342,11 @@ def update_event_embedding(sender, instance, created, update_fields=None, **kwar
         # Specific fields updated - check if any affect embedding content
         embedding_fields = {'title', 'description', 'start_time', 'venue', 'room_name'}
         should_update = bool(embedding_fields.intersection(update_fields))
-    
+
     if should_update:
         try:
-            # Import here to avoid circular imports
-            from api.rag_service import get_rag_service
-            
-            logger.info(f"Generating embedding for event: {instance.title}")
-            rag_service = get_rag_service()
-            rag_service.update_event_embeddings(event_ids=[instance.id])
-            
+            from events.tasks import generate_embedding
+            generate_embedding.delay(instance.id)
+            logger.info(f"Queued embedding generation for event: {instance.title}")
         except Exception as e:
-            logger.error(f"Failed to generate embedding for event {instance.id}: {e}")
+            logger.error(f"Failed to queue embedding for event {instance.id}: {e}")

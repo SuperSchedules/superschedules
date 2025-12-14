@@ -21,3 +21,6 @@ torch
 torchvision
 sentence-transformers==2.7.0
 geopy==2.4.1
+celery[sqlalchemy]==5.4.0
+django-celery-beat==2.7.0
+django-celery-results==2.5.1

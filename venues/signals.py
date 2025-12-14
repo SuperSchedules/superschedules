@@ -10,7 +10,7 @@ def venue_post_save(sender, instance, created, **kwargs):
     Queue geocoding for newly created venues without coordinates.
 
     Only triggers for new venues (created=True) that don't have lat/long.
-    Geocoding runs asynchronously with a delay to respect rate limits.
+    Geocoding runs asynchronously via Celery with rate limiting.
     """
     if not created:
         return
@@ -19,5 +19,9 @@ def venue_post_save(sender, instance, created, **kwargs):
         logger.debug(f"Venue {instance.id} already has coordinates, skipping geocoding")
         return
 
-    from venues.geocoding import queue_geocoding
-    queue_geocoding(instance.id)
+    try:
+        from venues.tasks import geocode_venue_task
+        geocode_venue_task.delay(instance.id)
+        logger.info(f"Queued geocoding for venue {instance.id}: {instance.name}")
+    except Exception as e:
+        logger.error(f"Failed to queue geocoding for venue {instance.id}: {e}")
