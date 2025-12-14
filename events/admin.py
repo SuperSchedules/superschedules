@@ -1,9 +1,15 @@
 from django.contrib import admin
 from django.contrib import messages
 from django.conf import settings
+from django.urls import path
+from django.shortcuts import render
+from django.db import connection
+from django.utils.html import format_html
 import requests
 import logging
+import json
 from .models import Source, Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch
+from .celery_models import KombuMessage, KombuQueue
 
 logger = logging.getLogger(__name__)
 
@@ -130,4 +136,150 @@ class ScrapingJobAdmin(admin.ModelAdmin):
 @admin.register(ScrapeBatch)
 class ScrapeBatchAdmin(admin.ModelAdmin):
     list_display = ("id", "submitted_by", "created_at")
+
+
+# Unregister the default TaskResult admin and register our custom one
+try:
+    from django_celery_results.models import TaskResult
+    admin.site.unregister(TaskResult)
+
+    @admin.register(TaskResult)
+    class CustomTaskResultAdmin(admin.ModelAdmin):
+        """Enhanced TaskResult admin with queue visibility."""
+
+        list_display = ('task_id_short', 'task_name', 'periodic_task_name', 'status', 'date_created', 'date_done', 'worker')
+        list_filter = ('status', 'task_name', 'periodic_task_name', 'worker')
+        search_fields = ('task_id', 'task_name', 'periodic_task_name')
+        readonly_fields = ('task_id', 'task_name', 'task_args', 'task_kwargs', 'status', 'result', 'traceback', 'date_created', 'date_done', 'worker')
+        date_hierarchy = 'date_created'
+
+        # Show most recent tasks first
+        ordering = ('-date_created',)
+
+        # Only show recent tasks by default (last 7 days)
+        def get_queryset(self, request):
+            qs = super().get_queryset(request)
+            # Add a check box or filter to show all vs recent
+            return qs
+
+        def task_id_short(self, obj):
+            """Show shortened task ID for readability."""
+            return obj.task_id[:13] + '...' if obj.task_id else '-'
+        task_id_short.short_description = 'Task ID'
+
+        # Add custom actions
+        actions = ['show_queue_status']
+
+        def show_queue_status(self, request, queryset):
+            """Show current queue status from Kombu tables."""
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM kombu_message WHERE visible = true
+                    """)
+                    pending_count = cursor.fetchone()[0]
+
+                self.message_user(request, f"Queue status: {pending_count} pending tasks in queue", level=messages.INFO)
+            except Exception as e:
+                self.message_user(request, f"Error checking queue: {str(e)}", level=messages.ERROR)
+
+        show_queue_status.short_description = "Check queue status"
+
+except ImportError:
+    logger.warning("django-celery-results not installed, skipping TaskResult admin")
+
+
+# Kombu Queue Monitoring
+@admin.register(KombuMessage)
+class KombuMessageAdmin(admin.ModelAdmin):
+    """
+    Admin interface for viewing pending tasks in the Celery queue.
+
+    Read-only access to the kombu_message table.
+    """
+
+    list_display = ('id', 'task_name_display', 'task_id_display', 'timestamp', 'visible')
+    list_filter = ('visible', 'timestamp')
+    readonly_fields = ('id', 'task_name_display', 'task_id_display', 'task_args_display', 'payload_display', 'timestamp', 'visible')
+    search_fields = ('id',)
+    ordering = ('-timestamp',)
+
+    # Disable add/edit/delete permissions since this is read-only monitoring
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def task_name_display(self, obj):
+        """Extract and display task name from payload."""
+        info = obj.get_task_info()
+        return info.get('task_name', 'Unknown')
+    task_name_display.short_description = 'Task Name'
+
+    def task_id_display(self, obj):
+        """Extract and display task ID from payload."""
+        info = obj.get_task_info()
+        task_id = info.get('task_id', '')
+        return task_id[:13] + '...' if task_id else '-'
+    task_id_display.short_description = 'Task ID'
+
+    def task_args_display(self, obj):
+        """Extract and display task args from payload."""
+        info = obj.get_task_info()
+        args = info.get('args', [])
+        kwargs = info.get('kwargs', {})
+        return format_html(
+            '<strong>Args:</strong> {}<br><strong>Kwargs:</strong> {}',
+            json.dumps(args) if args else 'None',
+            json.dumps(kwargs) if kwargs else 'None'
+        )
+    task_args_display.short_description = 'Task Arguments'
+
+    def payload_display(self, obj):
+        """Display the full payload for debugging."""
+        info = obj.get_task_info()
+        if 'error' in info:
+            return format_html('<span style="color: red;">Error: {}</span>', info['error'])
+        return format_html('<pre>{}</pre>', json.dumps(info, indent=2))
+    payload_display.short_description = 'Payload Details'
+
+
+@admin.register(KombuQueue)
+class KombuQueueAdmin(admin.ModelAdmin):
+    """
+    Admin interface for viewing Celery queues.
+
+    Read-only access to the kombu_queue table.
+    """
+
+    list_display = ('id', 'name', 'message_count')
+    readonly_fields = ('id', 'name', 'message_count')
+    search_fields = ('name',)
+
+    # Disable add/edit/delete permissions
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def message_count(self, obj):
+        """Show count of messages in this queue."""
+        try:
+            with connection.cursor() as cursor:
+                # Note: kombu doesn't directly track which queue messages belong to
+                # This is a simplified count of all visible messages
+                cursor.execute("SELECT COUNT(*) FROM kombu_message WHERE visible = true")
+                count = cursor.fetchone()[0]
+                return count
+        except Exception as e:
+            return f"Error: {e}"
+    message_count.short_description = 'Pending Messages'
 
