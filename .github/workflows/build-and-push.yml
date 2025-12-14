@@ -29,8 +29,8 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/share/boost
-          # Clean Docker
-          docker system prune -af || true
+          # Clean Docker (including volumes)
+          docker system prune -af --volumes || true
           docker builder prune -af || true
           echo "=== Disk space after cleanup ==="
           df -h
