@@ -8,6 +8,13 @@ from api.services.health_aggregator import get_health_aggregator
 
 router = Router()
 
+# Import build info (will be generated during Docker build)
+try:
+    from build_info import BUILD_TIME, GIT_COMMIT
+except ImportError:
+    BUILD_TIME = "unknown"
+    GIT_COMMIT = "unknown"
+
 
 @router.api_operation(["GET", "HEAD"], "/live", auth=None)
 def live(request):
@@ -41,6 +48,16 @@ def ready(request):
 
     status = "pass" if ok else "fail"
     return (200 if ok else 503, {"status": status, "checks": checks})
+
+
+@router.api_operation(["GET", "HEAD"], "/health", auth=None)
+def health(request):
+    """Simple health check with build version info."""
+    return {
+        "status": "healthy",
+        "build_time": BUILD_TIME,
+        "git_commit": GIT_COMMIT
+    }
 
 
 @router.get("/health/dashboard", auth=None, response={200: dict, 503: dict})

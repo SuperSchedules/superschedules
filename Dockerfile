@@ -1,6 +1,10 @@
 # Multi-stage build for smaller final image
 FROM python:3.12-slim AS builder
 
+# Build arguments for version info
+ARG BUILD_TIME
+ARG GIT_COMMIT
+
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
@@ -18,6 +22,10 @@ RUN pip install --no-cache-dir --user torch==2.5.1 --index-url https://download.
 # Production stage
 FROM python:3.12-slim
 
+# Build arguments for version info (need to redeclare in this stage)
+ARG BUILD_TIME
+ARG GIT_COMMIT
+
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
@@ -31,6 +39,11 @@ COPY --from=builder /root/.local /root/.local
 
 # Copy application code
 COPY . .
+
+# Generate build_info.py with version metadata
+RUN echo "# Auto-generated build information" > /app/build_info.py && \
+    echo "BUILD_TIME = '${BUILD_TIME:-unknown}'" >> /app/build_info.py && \
+    echo "GIT_COMMIT = '${GIT_COMMIT:-unknown}'" >> /app/build_info.py
 
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
