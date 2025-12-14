@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        BUILD_TIME: ${BUILD_TIME:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-key}
+      - DB_HOST=db
+      - DB_NAME=superschedules
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - COLLECTOR_URL=http://collector:8001
+      - NAVIGATOR_URL=http://navigator:8004
+    depends_on:
+      - db
+    command: >
+      gunicorn config.asgi:application
+      -k uvicorn.workers.UvicornWorker
+      -b 0.0.0.0:8000
+      --workers 3
+      --access-logfile -
+
+  celery-worker:
+    build:
+      context: .
+      args:
+        BUILD_TIME: ${BUILD_TIME:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-key}
+      - DB_HOST=db
+      - DB_NAME=superschedules
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - COLLECTOR_URL=http://collector:8001
+    depends_on:
+      - db
+    command: >
+      celery -A config worker
+      --loglevel=INFO
+      --concurrency=2
+      --queues=default,embeddings,geocoding,scraping
+    # Can scale workers horizontally
+    deploy:
+      replicas: 1
+
+  celery-beat:
+    build:
+      context: .
+      args:
+        BUILD_TIME: ${BUILD_TIME:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-key}
+      - DB_HOST=db
+      - DB_NAME=superschedules
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    depends_on:
+      - db
+    command: >
+      celery -A config beat
+      --loglevel=INFO
+      --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+    # IMPORTANT: Only ONE beat instance should run to avoid duplicate scheduled tasks
+    deploy:
+      replicas: 1
+
+  db:
+    image: pgvector/pgvector:pg15
+    environment:
+      - POSTGRES_DB=superschedules
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
