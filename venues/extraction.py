@@ -420,6 +420,11 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
             state__iexact=state_upper,
             postal_code=postal_code
         )
+        # Update coordinates if venue is missing them but collector provided them
+        if venue.latitude is None and normalized.get("latitude"):
+            venue.latitude = _to_decimal(normalized.get("latitude"))
+            venue.longitude = _to_decimal(normalized.get("longitude"))
+            venue.save(update_fields=["latitude", "longitude"])
         return venue, False
     except Venue.DoesNotExist:
         pass

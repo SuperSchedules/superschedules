@@ -285,8 +285,15 @@ LOGGING = {
 }
 
 # Celery Configuration
-# Using database as broker (django-db backend) - suitable for idempotent bookkeeping tasks
-CELERY_BROKER_URL = 'django-db'
+# Using PostgreSQL as broker via SQLAlchemy - suitable for idempotent bookkeeping tasks
+# Build broker URL from Django database settings
+if DB_HOST:
+    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+else:
+    # Local development with peer auth
+    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}@/{DB_NAME}'
+
+# Results stored via django-celery-results
 CELERY_RESULT_BACKEND = 'django-db'
 
 # Celery Beat scheduler uses database
