@@ -178,7 +178,6 @@ class QueueEndpointsTests(TestCase):
                         'external_id': 'evt-123',
                         'title': 'Test Event',
                         'description': 'Test Description',
-                        'location': 'Test Location',
                         'start_time': '2025-01-01T10:00:00Z',
                         'end_time': '2025-01-01T12:00:00Z',
                         'url': 'https://example.com/event/123',

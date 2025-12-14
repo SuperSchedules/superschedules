@@ -59,7 +59,6 @@ class ScrapingTests(TestCase):
                     "external_id": "1",
                     "title": "Test Event",
                     "description": "Desc",
-                    "location": "Loc",
                     "start_time": (timezone.now() + timedelta(days=1)).isoformat(),
                 }
             ],

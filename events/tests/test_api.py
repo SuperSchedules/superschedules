@@ -84,7 +84,6 @@ class EventCRUDTests(TestCase):
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
-            "location": "Loc",
             "start_time": timezone.now().isoformat(),
         }
         resp = client.post("/api/v1/events/", payload, format="json")
@@ -97,7 +96,6 @@ class EventCRUDTests(TestCase):
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
-            "location": "Loc",
             "start_time": timezone.now().isoformat(),
         }
 
@@ -118,7 +116,6 @@ class EventCRUDTests(TestCase):
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
-            "location": "Loc",
             "start_time": timezone.now().isoformat(),
             "metadata_tags": ["tag1", "tag2"],
         }
@@ -147,7 +144,6 @@ class EventCRUDTests(TestCase):
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
-            "location": "Loc",
             "start_time": timezone.now().isoformat(),
             "url": "https://example.com/event/1",
             "metadata_tags": ["tag1"],

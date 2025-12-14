@@ -122,7 +122,6 @@ class EventUpdateSchema(Schema):
     external_id: str | None = None
     title: str | None = None
     description: str | None = None
-    location: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     url: str | None = None
@@ -181,7 +180,6 @@ class ScrapeResultEventSchema(Schema):
     external_id: str
     title: str
     description: str
-    location: str = ""  # Deprecated, kept for backward compatibility
     location_data: dict | None = None  # Structured location from collector
     start_time: datetime
     end_time: datetime | None = None

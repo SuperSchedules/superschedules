@@ -33,7 +33,6 @@ class SaveScrapeResultsTests(TestCase):
                     "external_id": "evt_001",
                     "title": "Summer Concert",
                     "description": "Outdoor music event",
-                    "location": "Central Park",
                     "start_time": "2024-07-15T18:00:00Z",
                     "end_time": "2024-07-15T20:00:00Z",
                     "url": "https://example.com/events/001",
@@ -47,7 +46,6 @@ class SaveScrapeResultsTests(TestCase):
                     "external_id": "evt_002",
                     "title": "Art Workshop",
                     "description": "Learn watercolor",
-                    "location": "Community Center",
                     "start_time": "2024-07-20T14:00:00Z",
                     "metadata_tags": ["art"]
                 }
@@ -104,7 +102,7 @@ class SaveScrapeResultsTests(TestCase):
         assert not Source.objects.filter(base_url="https://example.com").exists()
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
-                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc", "location": "Place",
+                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
                              "start_time": "2024-07-15T18:00:00Z"}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
@@ -122,7 +120,7 @@ class SaveScrapeResultsTests(TestCase):
         existing_source = baker.make(Source, base_url="https://example.com", user=self.user)
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
-                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc", "location": "Place",
+                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
                              "start_time": "2024-07-15T18:00:00Z"}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
@@ -138,7 +136,7 @@ class SaveScrapeResultsTests(TestCase):
         existing_source = baker.make(Source, base_url="https://example.com", site_strategy=None)
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
-                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc", "location": "Place",
+                  "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
                              "start_time": "2024-07-15T18:00:00Z"}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
@@ -152,7 +150,7 @@ class SaveScrapeResultsTests(TestCase):
     def test_optional_event_fields(self):
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_min", "title": "Minimal Event", "description": "Description",
-                             "location": "Location", "start_time": "2024-07-15T18:00:00Z"}]}
+                             "start_time": "2024-07-15T18:00:00Z"}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
