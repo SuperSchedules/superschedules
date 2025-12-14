@@ -14,9 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies to /install so we can copy them cleanly
+# Install Python dependencies
 COPY requirements-prod.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements-prod.txt
+RUN pip install --no-cache-dir --user torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --user -r requirements-prod.txt
 
 # Production stage
 FROM python:3.12-slim
@@ -33,32 +34,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for running the application
-RUN useradd --create-home --shell /bin/bash appuser
-
-# Copy installed packages from builder to system Python
-COPY --from=builder /install /usr/local
+# Copy installed packages from builder
+COPY --from=builder /root/.local /root/.local
 
 # Copy application code
-COPY --chown=appuser:appuser . .
+COPY . .
 
 # Generate build_info.py with version metadata
 RUN echo "# Auto-generated build information" > /app/build_info.py && \
     echo "BUILD_TIME = '${BUILD_TIME:-unknown}'" >> /app/build_info.py && \
-    echo "GIT_COMMIT = '${GIT_COMMIT:-unknown}'" >> /app/build_info.py && \
-    chown appuser:appuser /app/build_info.py
+    echo "GIT_COMMIT = '${GIT_COMMIT:-unknown}'" >> /app/build_info.py
 
-# Collect static files into the image (run as root, then fix ownership)
+# Make sure scripts in .local are usable
+ENV PATH=/root/.local/bin:$PATH
+
+# Collect static files into the image
+# Set minimal environment variables needed for collectstatic
 ENV DJANGO_SECRET_KEY=build-time-secret \
     DB_HOST=localhost \
     DB_NAME=placeholder \
     DB_USER=placeholder \
     DB_PASSWORD=placeholder
-RUN python manage.py collectstatic --noinput && \
-    chown -R appuser:appuser /app/staticfiles
-
-# Switch to non-root user
-USER appuser
+RUN python manage.py collectstatic --noinput
 
 # Run Django with gunicorn + uvicorn workers (supports both Django and FastAPI)
 CMD ["gunicorn", "config.asgi:application", \
