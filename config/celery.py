@@ -1,10 +1,13 @@
 """
 Celery configuration for Superschedules.
 
-Uses PostgreSQL database as message broker (django-db backend) since:
-- Tasks are idempotent bookkeeping operations
-- No need for Redis/RabbitMQ overhead
-- Jobs already use database for state management
+Uses AWS SQS as message broker for production:
+- Reliable, managed service (no maintenance)
+- Scales automatically with load
+- Integrated with AWS IAM for security
+- Better for production than database broker
+
+Results are stored in django-celery-results (database).
 """
 
 import os

@@ -1,15 +1,12 @@
 from django.contrib import admin
 from django.contrib import messages
 from django.conf import settings
-from django.urls import path
-from django.shortcuts import render
 from django.db import connection
 from django.utils.html import format_html
 import requests
 import logging
 import json
 from .models import Source, Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch
-from .celery_models import KombuMessage, KombuQueue
 
 logger = logging.getLogger(__name__)
 
@@ -171,115 +168,26 @@ try:
         actions = ['show_queue_status']
 
         def show_queue_status(self, request, queryset):
-            """Show current queue status from Kombu tables."""
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("""
-                        SELECT COUNT(*) FROM kombu_message WHERE visible = true
-                    """)
-                    pending_count = cursor.fetchone()[0]
+            """
+            Show current queue status.
 
-                self.message_user(request, f"Queue status: {pending_count} pending tasks in queue", level=messages.INFO)
-            except Exception as e:
-                self.message_user(request, f"Error checking queue: {str(e)}", level=messages.ERROR)
+            Note: With SQS broker, queue visibility is via AWS Console.
+            This action shows task result counts instead.
+            """
+            from django_celery_results.models import TaskResult
 
-        show_queue_status.short_description = "Check queue status"
+            stats = {
+                'PENDING': TaskResult.objects.filter(status='PENDING').count(),
+                'STARTED': TaskResult.objects.filter(status='STARTED').count(),
+                'SUCCESS': TaskResult.objects.filter(status='SUCCESS').count(),
+                'FAILURE': TaskResult.objects.filter(status='FAILURE').count(),
+            }
+
+            message = f"Task Status: {stats['PENDING']} pending, {stats['STARTED']} started, {stats['SUCCESS']} success, {stats['FAILURE']} failed"
+            self.message_user(request, message, level=messages.INFO)
+
+        show_queue_status.short_description = "Show task statistics"
 
 except ImportError:
     logger.warning("django-celery-results not installed, skipping TaskResult admin")
-
-
-# Kombu Queue Monitoring
-@admin.register(KombuMessage)
-class KombuMessageAdmin(admin.ModelAdmin):
-    """
-    Admin interface for viewing pending tasks in the Celery queue.
-
-    Read-only access to the kombu_message table.
-    """
-
-    list_display = ('id', 'task_name_display', 'task_id_display', 'timestamp', 'visible')
-    list_filter = ('visible', 'timestamp')
-    readonly_fields = ('id', 'task_name_display', 'task_id_display', 'task_args_display', 'payload_display', 'timestamp', 'visible')
-    search_fields = ('id',)
-    ordering = ('-timestamp',)
-
-    # Disable add/edit/delete permissions since this is read-only monitoring
-    def has_add_permission(self, request):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def task_name_display(self, obj):
-        """Extract and display task name from payload."""
-        info = obj.get_task_info()
-        return info.get('task_name', 'Unknown')
-    task_name_display.short_description = 'Task Name'
-
-    def task_id_display(self, obj):
-        """Extract and display task ID from payload."""
-        info = obj.get_task_info()
-        task_id = info.get('task_id', '')
-        return task_id[:13] + '...' if task_id else '-'
-    task_id_display.short_description = 'Task ID'
-
-    def task_args_display(self, obj):
-        """Extract and display task args from payload."""
-        info = obj.get_task_info()
-        args = info.get('args', [])
-        kwargs = info.get('kwargs', {})
-        return format_html(
-            '<strong>Args:</strong> {}<br><strong>Kwargs:</strong> {}',
-            json.dumps(args) if args else 'None',
-            json.dumps(kwargs) if kwargs else 'None'
-        )
-    task_args_display.short_description = 'Task Arguments'
-
-    def payload_display(self, obj):
-        """Display the full payload for debugging."""
-        info = obj.get_task_info()
-        if 'error' in info:
-            return format_html('<span style="color: red;">Error: {}</span>', info['error'])
-        return format_html('<pre>{}</pre>', json.dumps(info, indent=2))
-    payload_display.short_description = 'Payload Details'
-
-
-@admin.register(KombuQueue)
-class KombuQueueAdmin(admin.ModelAdmin):
-    """
-    Admin interface for viewing Celery queues.
-
-    Read-only access to the kombu_queue table.
-    """
-
-    list_display = ('id', 'name', 'message_count')
-    readonly_fields = ('id', 'name', 'message_count')
-    search_fields = ('name',)
-
-    # Disable add/edit/delete permissions
-    def has_add_permission(self, request):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def message_count(self, obj):
-        """Show count of messages in this queue."""
-        try:
-            with connection.cursor() as cursor:
-                # Note: kombu doesn't directly track which queue messages belong to
-                # This is a simplified count of all visible messages
-                cursor.execute("SELECT COUNT(*) FROM kombu_message WHERE visible = true")
-                count = cursor.fetchone()[0]
-                return count
-        except Exception as e:
-            return f"Error: {e}"
-    message_count.short_description = 'Pending Messages'
 

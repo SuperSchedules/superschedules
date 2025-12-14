@@ -285,17 +285,30 @@ LOGGING = {
 }
 
 # Celery Configuration
-# Using PostgreSQL as broker via SQLAlchemy - suitable for idempotent bookkeeping tasks
-# Build broker URL from Django database settings
-from urllib.parse import quote_plus
+# Using AWS SQS as broker for production reliability
+# Database broker was causing issues with message parsing and isn't recommended for production
 
-if DB_HOST:
-    # URL-encode password to handle special characters (@, :, /, + etc.)
-    encoded_password = quote_plus(DB_PASSWORD)
-    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+# SQS broker URL format: sqs://aws_access_key_id:aws_secret_access_key@
+# When running on EC2 with IAM role, credentials are automatic (no need to specify in URL)
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+if os.environ.get('USE_SQS_BROKER', 'True') == 'True':
+    # Production: Use SQS (credentials via IAM role)
+    CELERY_BROKER_URL = f'sqs://'
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'region': AWS_REGION,
+        'queue_name_prefix': 'superschedules-',
+        'visibility_timeout': 3600,  # 1 hour
+        'polling_interval': 1,  # Poll every second
+    }
 else:
-    # Local development with peer auth
-    CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}@/{DB_NAME}'
+    # Local development fallback: Use database broker
+    from urllib.parse import quote_plus
+    if DB_HOST:
+        encoded_password = quote_plus(DB_PASSWORD)
+        CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+    else:
+        CELERY_BROKER_URL = f'sqla+postgresql://{DB_USER}@/{DB_NAME}'
 
 # Results stored via django-celery-results
 CELERY_RESULT_BACKEND = 'django-db'
