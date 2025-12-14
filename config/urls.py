@@ -6,7 +6,7 @@ from api.health import router as health_router
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 # Import custom admin configuration to add build info to header
-from config.admin import BuildInfoAdminSite
+import config.admin  # noqa: F401 - imported for side effects
 
 # Instantiate the API without a global authentication requirement.
 # Individual routes will specify authentication as needed, allowing

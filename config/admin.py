@@ -11,14 +11,8 @@ except ImportError:
     GIT_COMMIT = "unknown"
 
 
-class BuildInfoAdminSite(admin.AdminSite):
-    """Custom admin site that shows build info in the header."""
-
-    site_header = f"EventZombie Admin | Built: {BUILD_TIME} ({GIT_COMMIT[:7] if GIT_COMMIT != 'unknown' else 'unknown'})"
-    site_title = "EventZombie Admin"
-    index_title = "Welcome to EventZombie Administration"
-
-
-# Replace the default admin site
-admin.site = BuildInfoAdminSite()
-admin.sites.site = admin.site
+# Modify the existing admin site's properties (don't replace it)
+commit_short = GIT_COMMIT[:7] if GIT_COMMIT != 'unknown' else 'unknown'
+admin.site.site_header = f"EventZombie Admin | Built: {BUILD_TIME} ({commit_short})"
+admin.site.site_title = "EventZombie Admin"
+admin.site.index_title = "Welcome to EventZombie Administration"
