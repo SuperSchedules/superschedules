@@ -541,19 +541,19 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
         room_name = ""
         if ev.location_data:
             loc_data = ev.location_data
-            venue_name = loc_data.get('venue_name', '')
-            city = loc_data.get('city', '')
+            venue_name = loc_data.get('venue_name') or ''
+            city = loc_data.get('city') or ''
             if venue_name and city:
                 venue, _ = Venue.objects.get_or_create(
                     name=venue_name,
                     city=city,
                     defaults={
-                        'street_address': loc_data.get('street_address', ''),
-                        'state': loc_data.get('state', ''),
-                        'postal_code': loc_data.get('postal_code', ''),
+                        'street_address': loc_data.get('street_address') or '',
+                        'state': loc_data.get('state') or '',
+                        'postal_code': loc_data.get('postal_code') or '',
                     }
                 )
-            room_name = loc_data.get('room_name', '')
+            room_name = loc_data.get('room_name') or ''
 
         event = Event.objects.create(
             source=source,

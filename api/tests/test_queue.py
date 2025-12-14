@@ -523,3 +523,116 @@ class QueueEndpointsTests(TestCase):
         self.assertEqual(ScrapingJob.objects.count(), 3)
         self.assertEqual(len(data['job_ids']), 3)
         self.assertIn(existing_job.id, data['job_ids'])
+
+    def test_complete_job_with_venue_location_data(self):
+        """Test completing a job with events that have location_data for venue creation."""
+        from venues.models import Venue
+
+        job = ScrapingJob.objects.create(
+            url='https://example.com/events',
+            domain='example.com',
+            status='processing',
+            submitted_by=self.user,
+            locked_by='test-worker-1'
+        )
+
+        response = self.client.post(
+            f'/queue/{job.id}/complete',
+            json={
+                'success': True,
+                'events': [
+                    {
+                        'external_id': 'evt-venue-123',
+                        'title': 'Story Time',
+                        'description': 'Fun stories for kids',
+                        'start_time': '2025-01-01T10:00:00Z',
+                        'url': 'https://example.com/event/storytime',
+                        'location_data': {
+                            'venue_name': 'Wellesley Free Library',
+                            'street_address': '530 Washington St',
+                            'city': 'Wellesley',
+                            'state': 'MA',
+                            'postal_code': '02482',
+                            'room_name': "Children's Room",
+                            'extraction_confidence': 0.9
+                        }
+                    }
+                ],
+                'events_found': 1,
+                'pages_processed': 1,
+                'processing_time': 2.5
+            },
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
+        )
+
+        self.assertEqual(response.status_code, 200, f"Got {response.status_code}: {response.json()}")
+        data = response.json()
+        self.assertEqual(len(data['created_event_ids']), 1)
+
+        # Verify event was created with venue
+        from events.models import Event
+        event = Event.objects.get(external_id='evt-venue-123')
+        self.assertEqual(event.title, 'Story Time')
+        self.assertIsNotNone(event.venue, "Event should have a venue")
+        self.assertEqual(event.venue.name, 'Wellesley Free Library')
+        self.assertEqual(event.venue.city, 'Wellesley')
+        self.assertEqual(event.room_name, "Children's Room")
+
+        # Verify venue was created
+        venue = Venue.objects.get(name='Wellesley Free Library')
+        self.assertEqual(venue.street_address, '530 Washington St')
+        self.assertEqual(venue.postal_code, '02482')
+
+    def test_complete_job_real_acton_maine_payload(self):
+        """Test /queue/complete with real payload that was causing 500 errors."""
+        from venues.models import Venue
+        from events.models import Event
+
+        job = ScrapingJob.objects.create(
+            url='https://www.actonmaine.org/mc-events/',
+            domain='www.actonmaine.org',
+            status='processing',
+            submitted_by=self.user,
+            locked_by='test-worker-1'
+        )
+
+        payload = {
+            "success": True,
+            "events": [
+                {
+                    "external_id": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "title": "Select Board",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Town Hall",
+                        "street_address": "35 H Road",
+                        "city": "Acton",
+                        "state": "ME",
+                        "postal_code": "04001",
+                        "extraction_confidence": 0.9
+                    },
+                    "start_time": "2025-12-17T18:00:00-05:00",
+                    "end_time": "2025-12-17T19:00:00-05:00",
+                    "url": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "metadata_tags": []
+                }
+            ],
+            "events_found": 1,
+            "pages_processed": 1,
+            "processing_time": 2.11098051071167
+        }
+
+        response = self.client.post(
+            f'/queue/{job.id}/complete',
+            json=payload,
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
+        )
+
+        self.assertEqual(response.status_code, 200, f"Got {response.status_code}: {response.json()}")
+
+        event = Event.objects.get(external_id="https://www.actonmaine.org/mc-events/select-board-81/")
+        self.assertEqual(event.title, "Select Board")
+        self.assertIsNotNone(event.venue)
+        self.assertEqual(event.venue.name, "Town Hall")
+        self.assertEqual(event.venue.city, "Acton")
+        self.assertEqual(event.venue.state, "ME")

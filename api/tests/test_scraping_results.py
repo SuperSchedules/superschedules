@@ -2,6 +2,7 @@ from datetime import datetime, timezone as dt_timezone
 from django.test import TestCase
 from django.utils import timezone
 from ninja.testing import TestClient
+from rest_framework.test import APIClient
 from model_bakery import baker
 
 from api.views import router
@@ -179,3 +180,292 @@ class SaveScrapeResultsTests(TestCase):
         response = self.client.post("/scrape/99999/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
         assert response.status_code == 404
+
+    def test_event_with_venue_location_data(self):
+        """Test that events with location_data create venues properly."""
+        from venues.models import Venue
+
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_venue_001",
+                    "title": "Story Time at Newton Library",
+                    "description": "Fun stories for kids",
+                    "start_time": "2024-07-15T10:00:00Z",
+                    "end_time": "2024-07-15T11:00:00Z",
+                    "url": "https://example.com/events/storytime",
+                    "location_data": {
+                        "venue_name": "Newton Free Library",
+                        "street_address": "330 Homer St",
+                        "city": "Newton",
+                        "state": "MA",
+                        "postal_code": "02459",
+                        "room_name": "Children's Room"
+                    }
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+        data = response.json()
+        assert len(data["created_event_ids"]) == 1
+
+        # Verify event was created with venue
+        event = Event.objects.get(external_id="evt_venue_001")
+        assert event.title == "Story Time at Newton Library"
+        assert event.venue is not None, "Event should have a venue"
+        assert event.venue.name == "Newton Free Library"
+        assert event.venue.city == "Newton"
+        assert event.venue.state == "MA"
+        assert event.room_name == "Children's Room"
+
+        # Verify venue was created
+        venue = Venue.objects.get(name="Newton Free Library", city="Newton")
+        assert venue.street_address == "330 Homer St"
+        assert venue.postal_code == "02459"
+
+    def test_event_with_minimal_location_data(self):
+        """Test events with only venue_name and city (minimum required)."""
+        from venues.models import Venue
+
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_minimal_venue",
+                    "title": "Community Event",
+                    "description": "A local event",
+                    "start_time": "2024-07-15T14:00:00Z",
+                    "location_data": {
+                        "venue_name": "Town Hall",
+                        "city": "Wellesley"
+                    }
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+        event = Event.objects.get(external_id="evt_minimal_venue")
+        assert event.venue is not None
+        assert event.venue.name == "Town Hall"
+        assert event.venue.city == "Wellesley"
+
+    def test_event_without_location_data(self):
+        """Test that events without location_data still work (venue will be None)."""
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_no_venue",
+                    "title": "Online Webinar",
+                    "description": "A virtual event",
+                    "start_time": "2024-07-15T18:00:00Z"
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200
+        event = Event.objects.get(external_id="evt_no_venue")
+        assert event.venue is None
+        assert event.room_name == ""
+
+    def test_event_with_empty_location_data(self):
+        """Test that events with empty location_data dict don't crash."""
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_empty_loc",
+                    "title": "Empty Location Event",
+                    "description": "Has empty location_data",
+                    "start_time": "2024-07-15T18:00:00Z",
+                    "location_data": {}
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+        event = Event.objects.get(external_id="evt_empty_loc")
+        assert event.venue is None
+
+    def test_event_with_partial_location_data_missing_city(self):
+        """Test that location_data without city doesn't create venue."""
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_no_city",
+                    "title": "Event Missing City",
+                    "description": "Has venue_name but no city",
+                    "start_time": "2024-07-15T18:00:00Z",
+                    "location_data": {
+                        "venue_name": "Some Library"
+                    }
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+        event = Event.objects.get(external_id="evt_no_city")
+        assert event.venue is None  # No venue without city
+
+    def test_event_with_null_values_in_location_data(self):
+        """Test that null values in location_data don't crash."""
+        payload = {
+            "success": True,
+            "events_found": 1,
+            "pages_processed": 1,
+            "events": [
+                {
+                    "external_id": "evt_null_vals",
+                    "title": "Event with Nulls",
+                    "description": "Has null values in location_data",
+                    "start_time": "2024-07-15T18:00:00Z",
+                    "location_data": {
+                        "venue_name": "Real Library",
+                        "city": "Boston",
+                        "state": None,
+                        "street_address": None,
+                        "postal_code": None
+                    }
+                }
+            ]
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+        event = Event.objects.get(external_id="evt_null_vals")
+        assert event.venue is not None
+        assert event.venue.name == "Real Library"
+        assert event.venue.city == "Boston"
+
+    def test_real_collector_payload_acton_maine(self):
+        """Test with real payload that was causing 500 errors."""
+        payload = {
+            "success": True,
+            "events": [
+                {
+                    "external_id": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "title": "Select Board",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Town Hall",
+                        "street_address": "35 H Road",
+                        "city": "Acton",
+                        "state": "ME",
+                        "postal_code": "04001",
+                        "extraction_confidence": 0.9
+                    },
+                    "start_time": "2025-12-17T18:00:00-05:00",
+                    "end_time": "2025-12-17T19:00:00-05:00",
+                    "url": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "metadata_tags": []
+                }
+            ],
+            "events_found": 1,
+            "pages_processed": 1,
+            "processing_time": 2.11098051071167
+        }
+
+        response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
+                                    headers={"Authorization": f"Bearer {self.service_token.token}"})
+
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
+
+        event = Event.objects.get(external_id="https://www.actonmaine.org/mc-events/select-board-81/")
+        assert event.title == "Select Board"
+        assert event.venue is not None
+        assert event.venue.name == "Town Hall"
+        assert event.venue.city == "Acton"
+        assert event.venue.state == "ME"
+
+
+class FullURLScrapeResultsTests(TestCase):
+    """Test using full URL path as collector calls it: POST /api/v1/scrape/{job_id}/results"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = baker.make(User, username="testuser")
+        self.service_token = baker.make(ServiceToken, name="test_service")
+        self.strategy = baker.make(SiteStrategy, domain="www.actonmaine.org")
+
+    def test_acton_maine_payload_full_url(self):
+        """Test exact payload and URL path that was causing 500 errors."""
+        job = baker.make(
+            ScrapingJob,
+            id=61,  # Use exact job ID from error
+            url="https://www.actonmaine.org/mc-events/",
+            domain="www.actonmaine.org",
+            submitted_by=self.user,
+            status="processing"
+        )
+
+        payload = {
+            "success": True,
+            "events": [
+                {
+                    "external_id": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "title": "Select Board",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Town Hall",
+                        "street_address": "35 H Road",
+                        "city": "Acton",
+                        "state": "ME",
+                        "postal_code": "04001",
+                        "extraction_confidence": 0.9
+                    },
+                    "start_time": "2025-12-17T18:00:00-05:00",
+                    "end_time": "2025-12-17T19:00:00-05:00",
+                    "url": "https://www.actonmaine.org/mc-events/select-board-81/",
+                    "metadata_tags": []
+                }
+            ],
+            "events_found": 1,
+            "pages_processed": 1,
+            "processing_time": 2.11098051071167
+        }
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}")
+        response = self.client.post(
+            f"/api/v1/scrape/{job.id}/results",
+            payload,
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, 200, f"Got {response.status_code}: {response.json()}")
+
+        event = Event.objects.get(external_id="https://www.actonmaine.org/mc-events/select-board-81/")
+        self.assertEqual(event.title, "Select Board")
+        self.assertIsNotNone(event.venue)
+        self.assertEqual(event.venue.name, "Town Hall")
+        self.assertEqual(event.venue.city, "Acton")
