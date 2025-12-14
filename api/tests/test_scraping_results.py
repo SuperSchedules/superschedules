@@ -469,3 +469,133 @@ class FullURLScrapeResultsTests(TestCase):
         self.assertIsNotNone(event.venue)
         self.assertEqual(event.venue.name, "Town Hall")
         self.assertEqual(event.venue.city, "Acton")
+
+    def test_existing_venue_reused_not_duplicated(self):
+        """Test that if venue already exists, we reuse it instead of failing."""
+        from venues.models import Venue
+
+        # Pre-create the venue
+        existing_venue = Venue.objects.create(
+            name="Town Hall",
+            city="Acton",
+            state="ME",
+            street_address="35 H Road",
+            postal_code="04001"
+        )
+
+        job = baker.make(
+            ScrapingJob,
+            url="https://www.actonmaine.org/mc-events/",
+            domain="www.actonmaine.org",
+            submitted_by=self.user,
+            status="processing"
+        )
+
+        payload = {
+            "success": True,
+            "events": [
+                {
+                    "external_id": "test-existing-venue-event",
+                    "title": "Select Board Meeting",
+                    "description": "Monthly meeting",
+                    "location_data": {
+                        "venue_name": "Town Hall",
+                        "street_address": "35 H Road",
+                        "city": "Acton",
+                        "state": "ME",
+                        "postal_code": "04001"
+                    },
+                    "start_time": "2025-12-17T18:00:00-05:00",
+                    "url": "https://www.actonmaine.org/test"
+                }
+            ],
+            "events_found": 1,
+            "pages_processed": 1
+        }
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}")
+        response = self.client.post(
+            f"/api/v1/scrape/{job.id}/results",
+            payload,
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, 200, f"Got {response.status_code}: {response.json()}")
+
+        # Verify only one venue exists (reused, not duplicated)
+        self.assertEqual(Venue.objects.filter(name="Town Hall", city="Acton").count(), 1)
+
+        # Verify event uses the existing venue
+        event = Event.objects.get(external_id="test-existing-venue-event")
+        self.assertEqual(event.venue.id, existing_venue.id)
+
+    def test_multiple_events_same_venue(self):
+        """Test submitting multiple events with the same venue in one request."""
+        from venues.models import Venue
+
+        job = baker.make(
+            ScrapingJob,
+            url="https://www.actonmaine.org/mc-events/",
+            domain="www.actonmaine.org",
+            submitted_by=self.user,
+            status="processing"
+        )
+
+        payload = {
+            "success": True,
+            "events": [
+                {
+                    "external_id": "event-1",
+                    "title": "Event One",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Community Center",
+                        "city": "Newton",
+                        "state": "MA"
+                    },
+                    "start_time": "2025-12-17T10:00:00-05:00"
+                },
+                {
+                    "external_id": "event-2",
+                    "title": "Event Two",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Community Center",
+                        "city": "Newton",
+                        "state": "MA"
+                    },
+                    "start_time": "2025-12-17T14:00:00-05:00"
+                },
+                {
+                    "external_id": "event-3",
+                    "title": "Event Three",
+                    "description": "",
+                    "location_data": {
+                        "venue_name": "Community Center",
+                        "city": "Newton",
+                        "state": "MA"
+                    },
+                    "start_time": "2025-12-17T18:00:00-05:00"
+                }
+            ],
+            "events_found": 3,
+            "pages_processed": 1
+        }
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}")
+        response = self.client.post(
+            f"/api/v1/scrape/{job.id}/results",
+            payload,
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, 200, f"Got {response.status_code}: {response.json()}")
+
+        # Verify only ONE venue was created (not 3)
+        self.assertEqual(Venue.objects.filter(name="Community Center", city="Newton").count(), 1)
+
+        # Verify all 3 events share the same venue
+        events = Event.objects.filter(external_id__in=["event-1", "event-2", "event-3"])
+        self.assertEqual(events.count(), 3)
+        venue_ids = set(e.venue_id for e in events)
+        self.assertEqual(len(venue_ids), 1, "All events should share the same venue")
