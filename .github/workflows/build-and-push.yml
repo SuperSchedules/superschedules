@@ -32,9 +32,9 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf /usr/local/share/boost
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          # Clean Docker (including volumes)
-          docker system prune -af --volumes || true
-          docker builder prune -af || true
+          # Selective Docker cleanup - remove only dangling/old images, keep build cache
+          docker image prune -af --filter "until=24h" || true
+          docker container prune -f || true
           echo "=== Disk space after cleanup ==="
           df -h /
 
