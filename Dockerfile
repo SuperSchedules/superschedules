@@ -16,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies to /install so we can copy them cleanly
 COPY requirements-prod.txt .
-RUN pip install --no-cache-dir --prefix=/install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir --prefix=/install -r requirements-prod.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements-prod.txt
 
 # Production stage
 FROM python:3.12-slim

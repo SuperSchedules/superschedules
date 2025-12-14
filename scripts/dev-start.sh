@@ -16,7 +16,6 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 FRONTEND_DIR="/home/gregk/superschedules_frontend"
-COLLECTOR_DIR="/home/gregk/superschedules_collector"
 NAVIGATOR_DIR="/home/gregk/superschedules_navigator"
 
 # Parse command-line arguments
@@ -38,7 +37,6 @@ done
 # Service ports
 DJANGO_PORT=8000
 CHAT_PORT=8002
-COLLECTOR_PORT=8001
 NAVIGATOR_PORT=8004
 FRONTEND_PORT=5173
 
@@ -227,33 +225,6 @@ start_chat_service() {
     fi
 }
 
-start_collector() {
-    print_status "Collector Service" "starting" "Starting collector service..."
-
-    if [[ ! -d "$COLLECTOR_DIR" ]]; then
-        print_status "Collector Service" "error" "Collector directory not found: $COLLECTOR_DIR"
-        return 1
-    fi
-
-    cd "$COLLECTOR_DIR"
-
-    if [[ ! -d ".venv" ]]; then
-        print_status "Collector Service" "error" "Virtual environment not found in collector"
-        return 1
-    fi
-
-    .venv/bin/python start_api.py --port $COLLECTOR_PORT >> "$LOG_DIR/collector.log" 2>&1 &
-    local pid=$!
-    echo "$pid" >> "$PID_FILE"
-
-    if wait_for_service "http://localhost:$COLLECTOR_PORT/health" "Collector Service"; then
-        print_status "Collector Service" "success" "Running on http://localhost:$COLLECTOR_PORT"
-        return 0
-    else
-        return 1
-    fi
-}
-
 start_navigator() {
     print_status "Navigator Service" "starting" "Starting navigator service..."
 
@@ -323,11 +294,9 @@ print_dashboard() {
     echo -e "  Frontend:          http://localhost:$FRONTEND_PORT"
     echo -e "  Django API:        http://localhost:$DJANGO_PORT"
     echo -e "  Chat Service:      http://localhost:$CHAT_PORT"
-    echo -e "  Collector Service: http://localhost:$COLLECTOR_PORT"
     echo -e "  Navigator Service: http://localhost:$NAVIGATOR_PORT"
     echo -e "\n${BLUE}📋 Service logs: $LOG_DIR/${NC}"
     echo -e "  tail -f $LOG_DIR/django.log"
-    echo -e "  tail -f $LOG_DIR/collector.log"
     echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}\n"
 }
 
@@ -343,7 +312,6 @@ main() {
     if ! check_ollama; then exit 1; fi
     if ! start_django; then exit 1; fi
     if ! start_chat_service; then exit 1; fi
-    if ! start_collector; then exit 1; fi
     if ! start_navigator; then exit 1; fi
     if ! start_frontend; then exit 1; fi
 
@@ -351,8 +319,8 @@ main() {
 
     # Show logs if requested
     if [[ "$SHOW_LOGS" == "true" ]]; then
-        echo -e "${BLUE}📄 Showing logs (Django + Collector):${NC}\n"
-        tail -f "$LOG_DIR/django.log" "$LOG_DIR/collector.log"
+        echo -e "${BLUE}📄 Showing logs (Django):${NC}\n"
+        tail -f "$LOG_DIR/django.log"
     else
         # Keep script running
         while true; do
