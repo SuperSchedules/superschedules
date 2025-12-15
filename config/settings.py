@@ -293,15 +293,15 @@ LOGGING = {
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
 if os.environ.get('USE_SQS_BROKER', 'True') == 'True':
-    # Production: Use SQS with boto3 transport (credentials via IAM role)
-    # boto3 is used automatically since pycurl is not installed
-    CELERY_BROKER_URL = f'sqs://'
+    # Production: Use SQS (credentials via IAM role)
+    CELERY_BROKER_URL = 'sqs://'
     CELERY_BROKER_TRANSPORT_OPTIONS = {
         'region': AWS_REGION,
         'queue_name_prefix': 'superschedules-',
         'visibility_timeout': 3600,  # 1 hour
         'polling_interval': 1,  # Poll every second
         'wait_time_seconds': 20,  # Enable long polling for efficiency
+        'is_secure': True,  # Use HTTPS
     }
 else:
     # Local development fallback: Use database broker

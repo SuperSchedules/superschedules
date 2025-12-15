@@ -8,10 +8,12 @@ ARG GIT_COMMIT
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (including libcurl for pycurl/SQS)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -29,9 +31,10 @@ ARG GIT_COMMIT
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install only runtime dependencies
+# Install only runtime dependencies (including libcurl for pycurl/SQS)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
