@@ -294,7 +294,7 @@ AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
 if os.environ.get('USE_SQS_BROKER', 'True') == 'True':
     # Production: Use SQS with boto3 transport (credentials via IAM role)
-    # Note: boto3 is preferred over pycurl as it's more reliable and already installed
+    # boto3 is used automatically since pycurl is not installed
     CELERY_BROKER_URL = f'sqs://'
     CELERY_BROKER_TRANSPORT_OPTIONS = {
         'region': AWS_REGION,
@@ -302,12 +302,6 @@ if os.environ.get('USE_SQS_BROKER', 'True') == 'True':
         'visibility_timeout': 3600,  # 1 hour
         'polling_interval': 1,  # Poll every second
         'wait_time_seconds': 20,  # Enable long polling for efficiency
-        # Force boto3 transport (kombu will try pycurl first by default)
-        'predefined_queues': {
-            'default': {
-                'url': f'https://sqs.{AWS_REGION}.amazonaws.com',
-            },
-        },
     }
 else:
     # Local development fallback: Use database broker
@@ -341,10 +335,17 @@ CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 7
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # One task at a time for rate-limited APIs
 CELERY_WORKER_CONCURRENCY = 2  # Conservative for database-backed broker
 
+# Set default queue to 'default' (not Celery's internal 'celery' queue)
+# This ensures all unrouted tasks go to 'default' which the worker listens on
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+
 # Task routes for prioritization
 CELERY_TASK_ROUTES = {
     'events.tasks.generate_embedding': {'queue': 'embeddings'},
     'venues.tasks.geocode_venue': {'queue': 'geocoding'},
+    'venues.tasks.geocode_venue_task': {'queue': 'geocoding'},
     'events.tasks.process_scraping_job': {'queue': 'scraping'},
+    # Catch-all routes for any other tasks
     'events.tasks.*': {'queue': 'default'},
+    'venues.tasks.*': {'queue': 'default'},
 }
