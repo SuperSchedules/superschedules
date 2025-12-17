@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.conf import settings
 from django.core import signing
 from django.core.mail import send_mail
-from ninja import ModelSchema, Router, Schema, Query
+from ninja import ModelSchema, Router, Schema, Query, Field
 from ninja.errors import HttpError
 from ninja_jwt.authentication import JWTAuth
 from django.shortcuts import get_object_or_404
@@ -41,6 +41,7 @@ class UserCreateSchema(Schema):
     password: str
     first_name: str | None = None
     last_name: str | None = None
+    turnstile_token: str | None = Field(None, alias="turnstileToken")
 
 
 class UserSchema(ModelSchema):
@@ -59,6 +60,10 @@ class PasswordResetRequestSchema(Schema):
 class PasswordResetConfirmSchema(Schema):
     token: str
     password: str
+
+
+class EmailVerificationResendSchema(Schema):
+    email: str
 
 
 class MessageSchema(Schema):
@@ -238,8 +243,59 @@ class BatchResponseSchema(Schema):
     job_ids: List[int]
 
 
+def _verify_turnstile(token: str) -> bool:
+    """Verify Turnstile token with Cloudflare. Returns True if valid."""
+    if not settings.TURNSTILE_SECRET_KEY:
+        return True  # Skip verification if not configured
+
+    try:
+        response = requests.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data={
+                "secret": settings.TURNSTILE_SECRET_KEY,
+                "response": token,
+            },
+            timeout=10,
+        )
+        result = response.json()
+        success = result.get("success", False)
+        if not success:
+            logger.warning(f"Turnstile verification failed: {result.get('error-codes', [])}")
+        return success
+    except Exception as e:
+        logger.error(f"Turnstile verification error: {e}")
+        return False
+
+
+def _send_verification_email(user):
+    """Send email verification link to user. Returns True if email sent successfully."""
+    token = signing.dumps({"user_id": user.id}, salt="email-verification")
+    verify_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+
+    try:
+        send_mail(
+            "Verify Your EventZombie Account",
+            f"Welcome to EventZombie!\n\nPlease verify your email address by clicking the link below:\n\n{verify_link}\n\nThis link will expire in 24 hours.\n\nIf you didn't create an account, you can safely ignore this email.",
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Verification email sent to {user.email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send verification email to {user.email}: {e}")
+        return False
+
+
 @router.post("/users/", auth=None, response={201: UserSchema})
 def create_user(request, payload: UserCreateSchema):
+    # Verify Turnstile token if configured
+    if settings.TURNSTILE_SECRET_KEY:
+        if not payload.turnstile_token:
+            raise HttpError(400, "Security verification required.")
+        if not _verify_turnstile(payload.turnstile_token):
+            raise HttpError(400, "Security verification failed. Please try again.")
+
     if User.objects.filter(username=payload.email).exists():
         raise HttpError(400, "A user with this email already exists.")
 
@@ -251,6 +307,8 @@ def create_user(request, payload: UserCreateSchema):
         last_name=payload.last_name or "",
         is_active=False,
     )
+
+    _send_verification_email(user)
 
     return 201, user
 
@@ -298,6 +356,40 @@ def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
     user.set_password(payload.password)
     user.save()
     return {"message": "Password has been reset."}
+
+
+@router.post("/users/verify/{token}/", auth=None, response={200: MessageSchema, 400: MessageSchema})
+def verify_email(request, token: str):
+    """Verify user's email address using the token from the verification email."""
+    try:
+        data = signing.loads(
+            token,
+            salt="email-verification",
+            max_age=settings.EMAIL_VERIFICATION_TIMEOUT,
+        )
+        user = User.objects.get(id=data["user_id"])
+    except SignatureExpired:
+        return 400, {"message": "Verification link has expired. Please request a new one."}
+    except (BadSignature, User.DoesNotExist):
+        return 400, {"message": "Invalid verification link."}
+
+    if user.is_active:
+        return 200, {"message": "Email already verified. You can log in."}
+
+    user.is_active = True
+    user.save()
+    logger.info(f"User {user.email} verified their email address")
+    return 200, {"message": "Email verified successfully. You can now log in."}
+
+
+@router.post("/users/resend-verification/", auth=None, response={200: MessageSchema})
+def resend_verification_email(request, payload: EmailVerificationResendSchema):
+    """Resend verification email to user."""
+    user = User.objects.filter(email=payload.email, is_active=False).first()
+    if user:
+        _send_verification_email(user)
+    # Always return success to prevent email enumeration
+    return {"message": "If an unverified account exists with this email, a verification link has been sent."}
 
 
 @router.get("/ping", auth=JWTAuth())

@@ -12,7 +12,7 @@ from venues.models import Venue
 class VenueAdmin(admin.ModelAdmin):
     """Admin interface for Venue management."""
 
-    list_display = ['name', 'city', 'state', 'postal_code', 'event_count', 'source_domain', 'created_at']
+    list_display = ['id', 'name', 'city', 'state', 'postal_code', 'latitude', 'longitude', 'event_count', 'source_domain', 'created_at']
     list_filter = ['state', 'city', 'created_at']
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain']
     readonly_fields = ['slug', 'created_at', 'updated_at']

@@ -74,6 +74,7 @@ process_sources_via_collector.short_description = "Process selected sources via 
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
     list_display = (
+        'id',
         'name',
         'base_url',
         'site_strategy',
@@ -100,9 +101,9 @@ class SourceAdmin(admin.ModelAdmin):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ('title', 'source', 'start_time', 'get_location_display', 'organizer', 'event_status')
+    list_display = ('id', 'title', 'source', 'start_time', 'get_location_display', 'organizer', 'event_status', 'created_at')
     search_fields = ('title', 'description', 'organizer')
-    list_filter = ('source', 'event_status', 'event_attendance_mode', 'start_time')
+    list_filter = ('source', 'event_status', 'event_attendance_mode', 'start_time', 'created_at')
     readonly_fields = ('external_id', 'created_at', 'updated_at')
     
     def get_location_display(self, obj):
