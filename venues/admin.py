@@ -6,6 +6,46 @@ from django.contrib import admin
 from django.db.models import Count
 
 from venues.models import Venue
+from venues.geocoding import geocode_venue
+
+
+def geolocate_venues(modeladmin, request, queryset):
+    """Trigger geocoding for selected venues."""
+    success = 0
+    skipped = 0
+    failed = 0
+
+    for venue in queryset:
+        if venue.latitude and venue.longitude:
+            skipped += 1
+            continue
+        if geocode_venue(venue.id):
+            success += 1
+        else:
+            failed += 1
+
+    modeladmin.message_user(request, f"Geocoded: {success}, Skipped (already has coords): {skipped}, Failed: {failed}")
+geolocate_venues.short_description = "Geolocate selected venues"
+
+
+def force_geolocate_venues(modeladmin, request, queryset):
+    """Force re-geocoding for selected venues (clears existing coords first)."""
+    success = 0
+    failed = 0
+
+    for venue in queryset:
+        # Clear existing coordinates so geocode_venue will run
+        venue.latitude = None
+        venue.longitude = None
+        venue.save(update_fields=['latitude', 'longitude'])
+
+        if geocode_venue(venue.id):
+            success += 1
+        else:
+            failed += 1
+
+    modeladmin.message_user(request, f"Re-geocoded: {success}, Failed: {failed}")
+force_geolocate_venues.short_description = "Force re-geolocate (overwrite existing)"
 
 
 @admin.register(Venue)
@@ -17,6 +57,7 @@ class VenueAdmin(admin.ModelAdmin):
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain']
     readonly_fields = ['slug', 'created_at', 'updated_at']
     ordering = ['-created_at']
+    actions = [geolocate_venues, force_geolocate_venues]
 
     fieldsets = (
         ('Venue Identity', {

@@ -124,11 +124,19 @@ class SiteStrategyAdmin(admin.ModelAdmin):
     search_fields = ("domain",)
 
 
+def reset_to_pending(modeladmin, request, queryset):
+    """Reset selected scraping jobs to pending status for retry."""
+    count = queryset.update(status='pending', error_message='', locked_by=None, locked_at=None)
+    modeladmin.message_user(request, f"{count} job(s) reset to pending.")
+reset_to_pending.short_description = "Reset to pending (retry)"
+
+
 @admin.register(ScrapingJob)
 class ScrapingJobAdmin(admin.ModelAdmin):
-    list_display = ("url", "status", "events_found", "created_at")
+    list_display = ("id", "url", "status", "events_found", "error_message", "created_at")
     search_fields = ("url", "domain")
     list_filter = ("status",)
+    actions = [reset_to_pending]
 
 
 @admin.register(ScrapeBatch)

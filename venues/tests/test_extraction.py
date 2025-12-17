@@ -10,6 +10,7 @@ from venues.extraction import (
     extract_from_html,
     build_venue_key,
     get_or_create_venue,
+    _clean_street_address,
 )
 from venues.models import Venue
 
@@ -468,3 +469,78 @@ class GetOrCreateVenueTests(TestCase):
         venue, _ = get_or_create_venue(normalized, "domain.com")
 
         self.assertEqual(venue.raw_schema, raw_schema)
+
+
+class CleanStreetAddressTests(TestCase):
+    """Tests for street address cleanup function."""
+
+    def test_removes_city_state_zip_country_from_street(self):
+        """Full address in street_address should be cleaned to just street."""
+        street, postal = _clean_street_address(
+            "205 Hartford Ave, Bellingham, MA 02019-3001, United States",
+            "Bellingham",
+            "MA",
+            ""
+        )
+        self.assertEqual(street, "205 Hartford Ave")
+        self.assertEqual(postal, "02019")
+
+    def test_extracts_postal_code_when_missing(self):
+        """Extract postal code from street_address if not provided."""
+        street, postal = _clean_street_address(
+            "123 Main St, Boston, MA 02101",
+            "Boston",
+            "MA",
+            ""
+        )
+        self.assertEqual(street, "123 Main St")
+        self.assertEqual(postal, "02101")
+
+    def test_preserves_existing_postal_code(self):
+        """Don't overwrite existing postal_code."""
+        street, postal = _clean_street_address(
+            "123 Main St, Boston, MA 02101",
+            "Boston",
+            "MA",
+            "99999"  # Already have one
+        )
+        self.assertEqual(postal, "99999")
+
+    def test_handles_zip_plus_four(self):
+        """Strip +4 extension from ZIP code."""
+        street, postal = _clean_street_address(
+            "456 Oak Rd, Newton, MA 02458-1234, United States",
+            "Newton",
+            "MA",
+            ""
+        )
+        self.assertEqual(street, "456 Oak Rd")
+        self.assertEqual(postal, "02458")
+
+    def test_handles_already_clean_address(self):
+        """Clean address should pass through unchanged."""
+        street, postal = _clean_street_address(
+            "735 Main Street",
+            "Waltham",
+            "MA",
+            "02451"
+        )
+        self.assertEqual(street, "735 Main Street")
+        self.assertEqual(postal, "02451")
+
+    def test_handles_empty_street_address(self):
+        """Empty street_address returns empty string."""
+        street, postal = _clean_street_address("", "Boston", "MA", "02101")
+        self.assertEqual(street, "")
+        self.assertEqual(postal, "02101")
+
+    def test_removes_usa_variants(self):
+        """Remove various USA/United States suffixes."""
+        for suffix in [", United States", ", USA", ", US"]:
+            street, _ = _clean_street_address(
+                f"100 Test St, Boston, MA 02101{suffix}",
+                "Boston",
+                "MA",
+                ""
+            )
+            self.assertEqual(street, "100 Test St")

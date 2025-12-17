@@ -124,15 +124,69 @@ def _is_high_confidence(location_data: dict) -> bool:
     return has_venue or has_city
 
 
+def _clean_street_address(street_address: str, city: str, state: str, postal_code: str) -> tuple[str, str]:
+    """
+    Clean street_address that may contain full address with city/state/zip/country.
+
+    Returns:
+        Tuple of (cleaned_street_address, extracted_postal_code)
+        extracted_postal_code is returned if postal_code was empty but found in street_address
+    """
+    if not street_address:
+        return "", postal_code
+
+    cleaned = street_address.strip()
+
+    # Remove country suffixes
+    for country in [", United States", ", USA", ", US", " United States", " USA"]:
+        if cleaned.endswith(country):
+            cleaned = cleaned[:-len(country)].strip().rstrip(",")
+
+    # Try to extract postal code if we don't have one
+    extracted_postal = postal_code
+    if not postal_code:
+        # Match 5-digit ZIP, optionally with +4
+        zip_match = re.search(r'\b(\d{5})(?:-\d{4})?\b', cleaned)
+        if zip_match:
+            extracted_postal = zip_match.group(1)
+
+    # Remove ZIP+4 or ZIP from end (e.g., "02019-3001" or "02019")
+    cleaned = re.sub(r',?\s*\d{5}(?:-\d{4})?$', '', cleaned).strip().rstrip(",")
+
+    # Remove state abbreviation from end if it matches
+    if state:
+        state_pattern = rf',?\s*{re.escape(state)}$'
+        cleaned = re.sub(state_pattern, '', cleaned, flags=re.IGNORECASE).strip().rstrip(",")
+
+    # Remove city from end if it matches
+    if city:
+        city_pattern = rf',?\s*{re.escape(city)}$'
+        cleaned = re.sub(city_pattern, '', cleaned, flags=re.IGNORECASE).strip().rstrip(",")
+
+    return cleaned, extracted_postal
+
+
 def _normalize_from_location_data(location_data: dict) -> dict:
     """Convert collector's location_data to normalized format."""
+    city = location_data.get("city", "")
+    state = _normalize_state(location_data.get("state", ""))
+    postal_code = location_data.get("postal_code", "")
+
+    # Clean street_address - remove city/state/zip if accidentally included
+    raw_street = location_data.get("street_address", "")
+    cleaned_street, extracted_postal = _clean_street_address(raw_street, city, state, postal_code)
+
+    # Use extracted postal code if we didn't have one
+    if not postal_code and extracted_postal:
+        postal_code = extracted_postal
+
     return {
         "venue_name": location_data.get("venue_name", ""),
         "room_name": location_data.get("room_name", ""),
-        "street_address": location_data.get("street_address", ""),
-        "city": location_data.get("city", ""),
-        "state": _normalize_state(location_data.get("state", "")),
-        "postal_code": location_data.get("postal_code", ""),
+        "street_address": cleaned_street,
+        "city": city,
+        "state": state,
+        "postal_code": postal_code,
         "country": location_data.get("country", "US"),
         "latitude": location_data.get("latitude"),
         "longitude": location_data.get("longitude"),
