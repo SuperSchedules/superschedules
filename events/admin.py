@@ -126,7 +126,7 @@ class SiteStrategyAdmin(admin.ModelAdmin):
 
 def reset_to_pending(modeladmin, request, queryset):
     """Reset selected scraping jobs to pending status for retry."""
-    count = queryset.update(status='pending', error_message='', locked_by=None, locked_at=None)
+    count = queryset.update(status='pending', error_message='', locked_by='', locked_at=None)
     modeladmin.message_user(request, f"{count} job(s) reset to pending.")
 reset_to_pending.short_description = "Reset to pending (retry)"
 
