@@ -560,17 +560,208 @@ class TestContextEventsVenueData(RAGServiceTest):
             self.assertEqual(context_events[0]['room_name'], '')
 
 
-class TestEmbeddingManagement(RAGServiceTest):
-    """Test embedding creation and management."""
-    
+class TestDateRangeFiltering(RAGServiceTest):
+    """Test explicit date range filtering in semantic search and get_context_events."""
+
     def setUp(self):
         super().setUp()
         self.rag_service = EventRAGService()
-        
-        # Mock the sentence transformer 
+
+        # Mock the sentence transformer
         self.mock_model = MagicMock()
         self.rag_service.model = self.mock_model
-        
+
+        # Create mock embeddings for test events with correct 384 dimensions
+        import numpy as np
+        np.random.seed(42)
+
+        for event in [self.baby_storytime, self.dance_class, self.teen_space, self.virtual_event]:
+            event.embedding = np.random.rand(384).tolist()
+            event.save()
+
+    def test_semantic_search_with_explicit_date_from(self):
+        """Test that date_from filters out events before the specified date."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        # Set date_from to 2 days from now - should exclude events tomorrow
+        date_from = timezone.now() + timedelta(days=2)
+        results = self.rag_service.semantic_search(
+            "test query",
+            date_from=date_from,
+            only_future_events=False  # Don't apply additional future filter
+        )
+
+        # Should only get events 2+ days from now (virtual_event is day after tomorrow)
+        returned_events = [event for event, score in results]
+        for event in returned_events:
+            self.assertGreaterEqual(event.start_time, date_from)
+
+    def test_semantic_search_with_explicit_date_to(self):
+        """Test that date_to filters out events after the specified date."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        # Set date_to to 1.5 days from now - should only get events tomorrow
+        date_to = timezone.now() + timedelta(days=1, hours=12)
+        results = self.rag_service.semantic_search(
+            "test query",
+            date_to=date_to,
+            only_future_events=True
+        )
+
+        returned_events = [event for event, score in results]
+        for event in returned_events:
+            self.assertLessEqual(event.start_time, date_to)
+
+    def test_semantic_search_with_date_range(self):
+        """Test that date_from and date_to together create a proper date range filter."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        # Create a narrow date range that should only include specific events
+        date_from = timezone.now() + timedelta(days=1, hours=9)  # Tomorrow 9 AM
+        date_to = timezone.now() + timedelta(days=1, hours=12)   # Tomorrow 12 PM
+
+        results = self.rag_service.semantic_search(
+            "test query",
+            date_from=date_from,
+            date_to=date_to,
+            only_future_events=False
+        )
+
+        returned_events = [event for event, score in results]
+        for event in returned_events:
+            self.assertGreaterEqual(event.start_time, date_from)
+            self.assertLessEqual(event.start_time, date_to)
+
+    def test_date_range_overrides_time_filter_days(self):
+        """Test that explicit date range parameters override time_filter_days."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        # Set time_filter_days=1 but date_to=7 days out - date_to should win
+        date_to = timezone.now() + timedelta(days=7)
+        results = self.rag_service.semantic_search(
+            "test query",
+            time_filter_days=1,  # Would normally filter to 1 day
+            date_to=date_to,     # But this should allow up to 7 days
+            only_future_events=True
+        )
+
+        # Should include virtual_event which is 2 days out (would be excluded by time_filter_days=1)
+        returned_event_ids = [event.id for event, score in results]
+        self.assertIn(self.virtual_event.id, returned_event_ids)
+
+    def test_get_context_events_with_date_range(self):
+        """Test that get_context_events passes date range to semantic search."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        date_from = timezone.now() + timedelta(days=1)
+        date_to = timezone.now() + timedelta(days=3)
+
+        with patch.object(self.rag_service, 'semantic_search') as mock_search:
+            mock_search.return_value = [(self.baby_storytime, 0.8)]
+
+            self.rag_service.get_context_events(
+                "activities",
+                date_from=date_from,
+                date_to=date_to
+            )
+
+            # Verify semantic_search was called with correct date range params
+            mock_search.assert_called_once()
+            call_kwargs = mock_search.call_args.kwargs
+            self.assertEqual(call_kwargs['date_from'], date_from)
+            self.assertEqual(call_kwargs['date_to'], date_to)
+
+    def test_get_context_events_with_explicit_location(self):
+        """Test that explicit location parameter overrides message extraction."""
+        with patch.object(self.rag_service, 'semantic_search') as mock_search:
+            mock_search.return_value = [(self.baby_storytime, 0.8)]
+
+            # Pass explicit location - should override any extracted locations
+            self.rag_service.get_context_events(
+                "activities in Boston",  # Message mentions Boston
+                location="Newton"         # But explicit param says Newton
+            )
+
+            # Verify semantic_search was called with explicit location
+            call_kwargs = mock_search.call_args.kwargs
+            self.assertEqual(call_kwargs['location_filter'], "Newton")
+
+
+class TestCityLocationFiltering(RAGServiceTest):
+    """Test location filtering that includes city search."""
+
+    def setUp(self):
+        super().setUp()
+        self.rag_service = EventRAGService()
+
+        # Mock the sentence transformer
+        self.mock_model = MagicMock()
+        self.rag_service.model = self.mock_model
+
+        # Create venues in different cities
+        self.newton_venue = baker.make(Venue, name="Newton Library", city="Newton", state="MA")
+        self.boston_venue = baker.make(Venue, name="Boston Library", city="Boston", state="MA")
+
+        # Create events at these venues
+        import numpy as np
+        np.random.seed(123)
+
+        self.newton_event = baker.make(
+            Event,
+            title="Newton Story Time",
+            venue=self.newton_venue,
+            start_time=timezone.now() + timedelta(days=1),
+            embedding=np.random.rand(384).tolist()
+        )
+        self.boston_event = baker.make(
+            Event,
+            title="Boston Story Time",
+            venue=self.boston_venue,
+            start_time=timezone.now() + timedelta(days=1),
+            embedding=np.random.rand(384).tolist()
+        )
+
+    def test_location_filter_searches_city(self):
+        """Test that location filter searches venue city field."""
+        import numpy as np
+        mock_query_embedding = np.random.rand(384).astype(np.float32)
+        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+
+        # Search for Newton events
+        results = self.rag_service.semantic_search(
+            "story time",
+            location_filter="Newton",
+            only_future_events=True
+        )
+
+        # Should find Newton event
+        returned_event_ids = [event.id for event, score in results]
+        self.assertIn(self.newton_event.id, returned_event_ids)
+        # Should not find Boston event
+        self.assertNotIn(self.boston_event.id, returned_event_ids)
+
+
+class TestEmbeddingManagement(RAGServiceTest):
+    """Test embedding creation and management."""
+
+    def setUp(self):
+        super().setUp()
+        self.rag_service = EventRAGService()
+
+        # Mock the sentence transformer
+        self.mock_model = MagicMock()
+        self.rag_service.model = self.mock_model
+
     def test_update_event_embeddings_creates_embeddings(self):
         """Test that update_event_embeddings creates embeddings for events."""
         import numpy as np

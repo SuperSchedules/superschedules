@@ -7,7 +7,7 @@ import json
 import asyncio
 import logging
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 import django
 from django.conf import settings
@@ -274,9 +274,9 @@ async def stream_chat(
             except Exception as e:
                 logger.warning("Ollama health check failed: %s", e)
             
-            # Get relevant events for context
-            relevant_events = await get_relevant_events(request.message)
-            
+            # Get relevant events for context (using frontend filters if provided)
+            relevant_events = await get_relevant_events(request.message, request.context)
+
             if request.single_model_mode:
                 # Single model mode - force DeepSeek (ignore frontend preference for now)
                 model_name = llm_service.primary_model  # Always use primary model
@@ -284,12 +284,13 @@ async def stream_chat(
                 
                 # Use retry mechanism for better reliability
                 model_generator = stream_model_response_with_retry(
-                    llm_service, 
-                    request.message, 
+                    llm_service,
+                    request.message,
                     relevant_events,
                     model_name=model_name,
                     model_id=model_id,
-                    max_retries=1  # One retry for better responsiveness
+                    max_retries=1,  # One retry for better responsiveness
+                    user_context=request.context
                 )
                 
                 # Stream from single model
@@ -317,19 +318,21 @@ async def stream_chat(
             else:
                 # A/B testing mode - use both models
                 model_a_generator = stream_model_response(
-                    llm_service, 
-                    request.message, 
+                    llm_service,
+                    request.message,
                     relevant_events,
                     model_name=request.model_a,
-                    model_id="A"
+                    model_id="A",
+                    user_context=request.context
                 )
-                
+
                 model_b_generator = stream_model_response(
-                    llm_service, 
-                    request.message, 
+                    llm_service,
+                    request.message,
                     relevant_events,
                     model_name=request.model_b,
-                    model_id="B"
+                    model_id="B",
+                    user_context=request.context
                 )
                 
                 # Stream responses from both models concurrently
@@ -382,28 +385,44 @@ async def stream_chat(
 
 
 async def stream_model_response(
-    llm_service, 
-    message: str, 
+    llm_service,
+    message: str,
     context_events: List[Dict],
     model_name: str | None = None,
-    model_id: str = "A"
+    model_id: str = "A",
+    user_context: Dict[str, Any] = None
 ):
     """
     Stream response from a single model using Ollama.
     This is a generator that yields StreamChunk objects.
+
+    Args:
+        llm_service: The LLM service instance
+        message: User's message
+        context_events: Events retrieved from RAG
+        model_name: Model to use (defaults to primary/backup based on model_id)
+        model_id: "A" or "B" for A/B testing
+        user_context: Frontend context (location, date_range, age_range, max_price, preferences)
     """
     try:
         # Use default models if not specified
         if model_name is None:
             model_name = llm_service.primary_model if model_id == "A" else llm_service.backup_model
-        
+
+        # Extract location and preferences from user context
+        location = None
+        preferences = {}
+        if user_context:
+            location = user_context.get('location')
+            preferences = user_context.get('preferences', {})
+
         # Create system and user prompts
         current_time = datetime.now()
         system_prompt, user_prompt = create_event_discovery_prompt(
             message, context_events, {
                 'current_date': current_time.strftime('%A, %B %d, %Y at %I:%M %p'),
-                'location': None,
-                'preferences': {}
+                'location': location,
+                'preferences': preferences
             }
         )
         
@@ -457,28 +476,58 @@ async def stream_model_response(
 
 
 
-async def get_relevant_events(message: str) -> List[Dict]:
+async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> List[Dict]:
     """
     Get relevant events for the message context using RAG.
+
+    Args:
+        message: User's search message
+        context: Optional context with filters (location, date_range, age_range, max_price)
     """
     try:
         # Use RAG service for semantic search
         rag_service = get_rag_service()
-        
+
         # Run RAG in thread since sentence transformers is CPU-bound
         import asyncio
         loop = asyncio.get_event_loop()
-        
+
+        # Calculate time filter and extract location from context
+        time_filter_days = 14  # Default: 2 weeks
+        date_from = None
+        date_to = None
+        location = None
+
+        if context:
+            # Extract location from context
+            location = context.get('location')
+
+            # Extract date range from context
+            date_range = context.get('date_range')
+            if date_range:
+                date_from_str = date_range.get('from')
+                date_to_str = date_range.get('to')
+                if date_from_str:
+                    date_from = datetime.fromisoformat(date_from_str).replace(tzinfo=timezone.utc)
+                if date_to_str:
+                    date_to = datetime.fromisoformat(date_to_str).replace(tzinfo=timezone.utc)
+                # If explicit date range provided, don't use time_filter_days
+                if date_from or date_to:
+                    time_filter_days = None
+
         def run_rag_search():
             return rag_service.get_context_events(
                 user_message=message,
                 max_events=8,
-                similarity_threshold=0.1,  # Higher threshold for more relevant results
-                time_filter_days=14  # Only show events in next 2 weeks
+                similarity_threshold=0.1,
+                time_filter_days=time_filter_days,
+                date_from=date_from,
+                date_to=date_to,
+                location=location
             )
-        
+
         context_events = await loop.run_in_executor(None, run_rag_search)
-        
+
         if context_events:
             logger.info("RAG found %d relevant events", len(context_events))
             return context_events
@@ -492,12 +541,13 @@ async def get_relevant_events(message: str) -> List[Dict]:
 
 
 async def stream_model_response_with_retry(
-    llm_service, 
-    message: str, 
+    llm_service,
+    message: str,
     context_events: List[Dict],
     model_name: str | None = None,
     model_id: str = "A",
-    max_retries: int = 2
+    max_retries: int = 2,
+    user_context: Dict[str, Any] = None
 ):
     """
     Stream response with retry logic for better reliability.
@@ -506,10 +556,10 @@ async def stream_model_response_with_retry(
         try:
             chunks_received = 0
             stream_completed = False
-            
+
             # Use original streaming function
             async for chunk in stream_model_response(
-                llm_service, message, context_events, model_name, model_id
+                llm_service, message, context_events, model_name, model_id, user_context
             ):
                 chunks_received += 1
                 yield chunk
@@ -622,8 +672,8 @@ async def chat_message(
         # Get LLM service
         llm_service = get_llm_service()
 
-        # Get relevant events for context
-        relevant_events = await get_relevant_events(request.message)
+        # Get relevant events for context (using frontend filters if provided)
+        relevant_events = await get_relevant_events(request.message, request.context)
 
         # Use single model mode (default)
         model_name = llm_service.primary_model
@@ -636,7 +686,8 @@ async def chat_message(
             relevant_events,
             model_name=model_name,
             model_id=model_id,
-            max_retries=1
+            max_retries=1,
+            user_context=request.context
         )
 
         async for chunk in model_generator:

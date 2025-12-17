@@ -110,48 +110,34 @@ class EventRAGService:
         logger.info(f"Updated embeddings for {len(event_list)} events")
     
     def semantic_search(
-        self, 
-        query: str, 
+        self,
+        query: str,
         top_k: int = 5,
         time_filter_days: int = 30,
         location_filter: str = None,
-        only_future_events: bool = True
+        only_future_events: bool = True,
+        date_from: datetime = None,
+        date_to: datetime = None
     ) -> List[Tuple[Event, float]]:
         """
         Perform semantic search for events using PostgreSQL vector operations.
-        
+
         Args:
             query: Natural language search query
             top_k: Number of results to return
-            time_filter_days: Only include events within this many days from now
-            location_filter: Optional location filter
+            time_filter_days: Only include events within this many days from now (ignored if date_from/date_to set)
+            location_filter: Optional location filter (city name or venue name)
             only_future_events: Only include events that haven't started yet
-            
+            date_from: Explicit start of date range (overrides time_filter_days)
+            date_to: Explicit end of date range (overrides time_filter_days)
+
         Returns:
             List of (Event, similarity_score) tuples
         """
         self._load_model()
-        
+
         # Compute query embedding
         query_embedding = self.model.encode([query], convert_to_numpy=True)[0]
-        
-        # Build the base query with time filtering
-        queryset = Event.objects.exclude(embedding__isnull=True)
-        
-        # Filter out past events by default
-        if only_future_events:
-            queryset = queryset.filter(start_time__gt=timezone.now())
-        
-        # Apply time window filter
-        if time_filter_days and time_filter_days > 0:
-            end_date = timezone.now() + timedelta(days=time_filter_days)
-            queryset = queryset.filter(start_time__lte=end_date)
-        
-        # Apply location filter (search venue name or room_name)
-        if location_filter:
-            queryset = queryset.filter(
-                Q(venue__name__icontains=location_filter) | Q(room_name__icontains=location_filter)
-            )
 
         # Perform vector similarity search using raw SQL (Django ORM CosineDistance has issues)
         from django.db import connection
@@ -160,17 +146,30 @@ class EventRAGService:
         where_conditions = ["embedding IS NOT NULL"]
         params = []
 
+        # Filter out past events by default
         if only_future_events:
             where_conditions.append("start_time > %s")
             params.append(timezone.now())
 
-        if time_filter_days and time_filter_days > 0:
+        # Apply date range filters - explicit dates override time_filter_days
+        if date_from:
+            where_conditions.append("start_time >= %s")
+            params.append(date_from)
+        if date_to:
+            where_conditions.append("start_time <= %s")
+            params.append(date_to)
+        elif time_filter_days and time_filter_days > 0:
+            # Only use time_filter_days if no explicit date range provided
             end_date = timezone.now() + timedelta(days=time_filter_days)
             where_conditions.append("start_time <= %s")
             params.append(end_date)
 
+        # Apply location filter (search venue name, city, or room_name)
         if location_filter:
-            where_conditions.append("(venue_id IN (SELECT id FROM venues_venue WHERE name ILIKE %s) OR room_name ILIKE %s)")
+            where_conditions.append(
+                "(venue_id IN (SELECT id FROM venues_venue WHERE name ILIKE %s OR city ILIKE %s) OR room_name ILIKE %s)"
+            )
+            params.append(f"%{location_filter}%")
             params.append(f"%{location_filter}%")
             params.append(f"%{location_filter}%")
         
@@ -212,36 +211,47 @@ class EventRAGService:
         return event_similarity_pairs
     
     def get_context_events(
-        self, 
-        user_message: str, 
+        self,
+        user_message: str,
         max_events: int = 10,
         similarity_threshold: float = 0.3,
-        time_filter_days: int = 30
+        time_filter_days: int = 30,
+        date_from: datetime = None,
+        date_to: datetime = None,
+        location: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get relevant future events for LLM context based on user message.
-        
+
         Args:
             user_message: User's natural language query
             max_events: Maximum events to return
             similarity_threshold: Minimum similarity score to include
-            time_filter_days: Only include events within this many days
-            
+            time_filter_days: Only include events within this many days (ignored if date_from/date_to set)
+            date_from: Explicit start of date range
+            date_to: Explicit end of date range
+            location: Explicit location filter (overrides message extraction)
+
         Returns:
             List of event dictionaries for LLM context
         """
         try:
-            # Extract location from message for filtering
-            location_hints = self._extract_location_hints(user_message)
-            location_filter = location_hints[0] if location_hints else None
-            
+            # Use explicit location if provided, otherwise extract from message
+            if location:
+                location_filter = location
+            else:
+                location_hints = self._extract_location_hints(user_message)
+                location_filter = location_hints[0] if location_hints else None
+
             # Perform semantic search with time filtering
             results = self.semantic_search(
                 query=user_message,
                 top_k=max_events * 2,  # Get more results to filter
                 time_filter_days=time_filter_days,
                 location_filter=location_filter,
-                only_future_events=True  # Only show events that haven't started
+                only_future_events=True,  # Only show events that haven't started
+                date_from=date_from,
+                date_to=date_to
             )
             
             # Filter by similarity threshold and format for LLM
