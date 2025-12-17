@@ -7,6 +7,7 @@ from django.db.models import Count
 
 from venues.models import Venue
 from venues.geocoding import geocode_venue
+from venues.extraction import _clean_street_address
 
 
 def geolocate_venues(modeladmin, request, queryset):
@@ -48,6 +49,38 @@ def force_geolocate_venues(modeladmin, request, queryset):
 force_geolocate_venues.short_description = "Force re-geolocate (overwrite existing)"
 
 
+def cleanup_addresses(modeladmin, request, queryset):
+    """Clean up street_address fields that contain full addresses."""
+    cleaned = 0
+    skipped = 0
+
+    for venue in queryset:
+        cleaned_street, extracted_postal = _clean_street_address(
+            venue.street_address or "",
+            venue.city or "",
+            venue.state or "",
+            venue.postal_code or ""
+        )
+
+        # Check if anything changed
+        changed = False
+        if cleaned_street != (venue.street_address or ""):
+            venue.street_address = cleaned_street
+            changed = True
+        if extracted_postal and not venue.postal_code:
+            venue.postal_code = extracted_postal
+            changed = True
+
+        if changed:
+            venue.save(update_fields=['street_address', 'postal_code'])
+            cleaned += 1
+        else:
+            skipped += 1
+
+    modeladmin.message_user(request, f"Cleaned: {cleaned}, Already clean: {skipped}")
+cleanup_addresses.short_description = "Clean up addresses (remove duplicated city/state/zip)"
+
+
 @admin.register(Venue)
 class VenueAdmin(admin.ModelAdmin):
     """Admin interface for Venue management."""
@@ -57,7 +90,7 @@ class VenueAdmin(admin.ModelAdmin):
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain']
     readonly_fields = ['slug', 'created_at', 'updated_at']
     ordering = ['-created_at']
-    actions = [geolocate_venues, force_geolocate_venues]
+    actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses]
 
     fieldsets = (
         ('Venue Identity', {
