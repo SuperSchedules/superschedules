@@ -470,6 +470,54 @@ class GetOrCreateVenueTests(TestCase):
 
         self.assertEqual(venue.raw_schema, raw_schema)
 
+    def test_truncates_long_venue_name(self):
+        """Venue names longer than 200 chars should be truncated."""
+        long_name = "A" * 250  # Exceeds max_length=200
+        normalized = {
+            "venue_name": long_name,
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+
+        venue, created = get_or_create_venue(normalized, "domain.com")
+
+        self.assertTrue(created)
+        self.assertEqual(len(venue.name), 200)
+        self.assertEqual(venue.name, "A" * 200)
+
+    def test_truncates_long_street_address(self):
+        """Street addresses longer than 255 chars should be truncated."""
+        long_address = "B" * 300  # Exceeds max_length=255
+        normalized = {
+            "venue_name": "Test Venue",
+            "street_address": long_address,
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+
+        venue, created = get_or_create_venue(normalized, "domain.com")
+
+        self.assertTrue(created)
+        self.assertEqual(len(venue.street_address), 255)
+
+    def test_truncates_long_source_domain(self):
+        """Source domain longer than 255 chars should be truncated."""
+        long_domain = "x" * 300 + ".com"  # Exceeds max_length=255
+
+        normalized = {
+            "venue_name": "Domain Test Venue",
+            "city": "Cambridge",
+            "state": "MA",
+            "postal_code": "02139"
+        }
+
+        venue, created = get_or_create_venue(normalized, long_domain)
+
+        self.assertTrue(created)
+        self.assertEqual(len(venue.source_domain), 255)
+
 
 class CleanStreetAddressTests(TestCase):
     """Tests for street address cleanup function."""

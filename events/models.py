@@ -273,22 +273,23 @@ class Event(models.Model):
         room_name = ""
         if normalized.get('venue_name') and normalized.get('city'):
             venue_obj, _ = get_or_create_venue(normalized, source_domain)
-            room_name = normalized.get('room_name', '')
+            room_name = normalized.get('room_name', '')[:200]  # Truncate to max_length
 
         # Create or update event with venue reference
+        # Truncate string fields to match model max_length constraints
         return cls.objects.update_or_create(
             source=source,
-            external_id=event_data.get('external_id', ''),
+            external_id=event_data.get('external_id', '')[:255],
             defaults={
-                "title": event_data.get('title', ''),
+                "title": event_data.get('title', '')[:255],
                 "description": event_data.get('description', ''),
                 "venue": venue_obj,
                 "room_name": room_name,
                 "raw_place_json": raw_place_json,
                 "raw_location_data": location_data,
-                "organizer": event_data.get('organizer', ''),
-                "event_status": event_data.get('event_status', ''),
-                "event_attendance_mode": event_data.get('event_attendance_mode', ''),
+                "organizer": event_data.get('organizer', '')[:200],
+                "event_status": event_data.get('event_status', '')[:50],
+                "event_attendance_mode": event_data.get('event_attendance_mode', '')[:50],
                 "start_time": event_data.get('start_time'),
                 "end_time": event_data.get('end_time'),
                 "url": event_data.get('url', ''),

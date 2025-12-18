@@ -461,36 +461,66 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
     Returns:
         Tuple of (Venue instance or None, created boolean)
     """
+    from django.db import IntegrityError
+
     if not normalized or not normalized.get("venue_name") or not normalized.get("city"):
         return None, False
 
     key = build_venue_key(normalized)
     slug, city_lower, state_upper, postal_code = key
 
-    # Use update_or_create to handle race conditions atomically
-    venue, created = Venue.objects.update_or_create(
-        slug=slug,
-        city__iexact=city_lower,
-        state__iexact=state_upper,
-        postal_code=postal_code,
-        defaults={
-            "name": normalized.get("venue_name", ""),
-            "street_address": normalized.get("street_address", ""),
-            "city": normalized.get("city", ""),
-            "state": state_upper or normalized.get("state", ""),
-            "country": normalized.get("country") or "US",
-            "source_domain": source_domain,
-            "raw_schema": normalized.get("raw_schema"),
-        }
-    )
+    # Truncate values to match model max_length constraints
+    slug = slug[:200]
+    postal_code = postal_code[:20]
+    name = normalized.get("venue_name", "")[:200]
+    street_address = normalized.get("street_address", "")[:255]
+    city = normalized.get("city", "")[:100]
+    state = (state_upper or normalized.get("state", ""))[:50]
+    country = (normalized.get("country") or "US")[:2]
+    source_domain_truncated = source_domain[:255] if source_domain else ""
 
-    # Update coordinates if venue is missing them but collector provided them
-    if venue.latitude is None and normalized.get("latitude"):
-        venue.latitude = _to_decimal(normalized.get("latitude"))
-        venue.longitude = _to_decimal(normalized.get("longitude"))
-        venue.save(update_fields=["latitude", "longitude"])
+    # Try to find existing venue with case-insensitive lookup
+    try:
+        venue = Venue.objects.get(
+            slug=slug,
+            city__iexact=city_lower,
+            state__iexact=state_upper,
+            postal_code=postal_code
+        )
+        # Update coordinates if venue is missing them but collector provided them
+        if venue.latitude is None and normalized.get("latitude"):
+            venue.latitude = _to_decimal(normalized.get("latitude"))
+            venue.longitude = _to_decimal(normalized.get("longitude"))
+            venue.save(update_fields=["latitude", "longitude"])
+        return venue, False
+    except Venue.DoesNotExist:
+        pass
 
-    return venue, created
+    # Create new venue, handling race condition with IntegrityError
+    try:
+        venue = Venue.objects.create(
+            name=name,
+            slug=slug,
+            street_address=street_address,
+            city=city,
+            state=state,
+            postal_code=postal_code,
+            country=country,
+            latitude=_to_decimal(normalized.get("latitude")),
+            longitude=_to_decimal(normalized.get("longitude")),
+            source_domain=source_domain_truncated,
+            raw_schema=normalized.get("raw_schema"),
+        )
+        return venue, True
+    except IntegrityError:
+        # Race condition: another process created the venue, fetch it
+        venue = Venue.objects.get(
+            slug=slug,
+            city__iexact=city_lower,
+            state__iexact=state_upper,
+            postal_code=postal_code
+        )
+        return venue, False
 
 
 def _to_decimal(value) -> Optional[Decimal]:
