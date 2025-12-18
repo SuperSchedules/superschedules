@@ -475,7 +475,7 @@ def create_event(request, payload: EventCreateSchema):
             source.site_strategy = strategy
             source.save(update_fields=["site_strategy"])
 
-    event = Event.create_with_schema_org_data({
+    event, _ = Event.create_with_schema_org_data({
         'external_id': payload.external_id,
         'title': payload.title,
         'description': payload.description,
@@ -627,6 +627,7 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
         source.site_strategy = strategy
         source.save(update_fields=["site_strategy"])
     created_ids = []
+    updated_ids = []
     for ev in payload.events:
         # Handle venue creation from location_data if provided
         venue = None
@@ -647,24 +648,29 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
                 )
             room_name = loc_data.get('room_name') or ''
 
-        event = Event.objects.create(
+        event, was_created = Event.objects.update_or_create(
             source=source,
-            scraping_job=job,
             external_id=ev.external_id,
-            title=ev.title,
-            description=ev.description,
-            venue=venue,
-            room_name=room_name,
-            start_time=ev.start_time,
-            end_time=ev.end_time,
-            url=ev.url,
-            metadata_tags=ev.metadata_tags or [],
-            affiliate_link=ev.affiliate_link or "",
-            revenue_source=ev.revenue_source or "",
-            commission_rate=ev.commission_rate,
-            affiliate_tracking_id=ev.affiliate_tracking_id or "",
+            defaults={
+                "scraping_job": job,
+                "title": ev.title,
+                "description": ev.description,
+                "venue": venue,
+                "room_name": room_name,
+                "start_time": ev.start_time,
+                "end_time": ev.end_time,
+                "url": ev.url,
+                "metadata_tags": ev.metadata_tags or [],
+                "affiliate_link": ev.affiliate_link or "",
+                "revenue_source": ev.revenue_source or "",
+                "commission_rate": ev.commission_rate,
+                "affiliate_tracking_id": ev.affiliate_tracking_id or "",
+            }
         )
-        created_ids.append(event.id)
+        if was_created:
+            created_ids.append(event.id)
+        else:
+            updated_ids.append(event.id)
     job.status = "completed" if payload.success else "failed"
     job.events_found = payload.events_found
     job.pages_processed = payload.pages_processed
@@ -672,7 +678,7 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
     job.error_message = payload.error_message or ""
     job.completed_at = timezone.now()
     job.save()
-    return {"created_event_ids": created_ids}
+    return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
 
 
 @router.post("/scrape/batch/", auth=JWTAuth(), response=BatchResponseSchema)
@@ -819,8 +825,9 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
         job.source = source
 
     created_ids = []
+    updated_ids = []
     for event_data in payload.events:
-        event = Event.create_with_schema_org_data({
+        event, was_created = Event.create_with_schema_org_data({
             'external_id': event_data.external_id,
             'title': event_data.title,
             'description': event_data.description,
@@ -830,10 +837,13 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
             'url': event_data.url,
             'tags': event_data.metadata_tags or [],
         }, source)
-        created_ids.append(event.id)
+        if was_created:
+            created_ids.append(event.id)
+        else:
+            updated_ids.append(event.id)
 
     job.status = 'completed' if payload.success else 'failed'
-    job.events_found = len(created_ids)
+    job.events_found = len(created_ids) + len(updated_ids)
     job.processing_time = payload.processing_time
     job.error_message = payload.error_message or ''
     job.completed_at = timezone.now()
@@ -843,8 +853,8 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
     source.last_run_at = timezone.now()
     source.save()
 
-    logger.info(f"Job {job_id} completed: {len(created_ids)} events")
-    return {"created_event_ids": created_ids}
+    logger.info(f"Job {job_id} completed: {len(created_ids)} created, {len(updated_ids)} updated")
+    return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
 
 
 @router.get("/queue/status", auth=JWTAuth())

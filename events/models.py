@@ -241,14 +241,14 @@ class Event(models.Model):
     @classmethod
     def create_with_schema_org_data(cls, event_data: dict, source):
         """
-        Create Event with Venue normalization from collector's location_data.
+        Create or update Event with Venue normalization from collector's location_data.
 
         Args:
             event_data: Event data from collector with location_data dict
             source: Source instance
 
         Returns:
-            Event instance
+            Tuple of (Event instance, was_created boolean)
         """
         from venues.extraction import normalize_venue_data, get_or_create_venue
         from urllib.parse import urlparse
@@ -275,23 +275,25 @@ class Event(models.Model):
             venue_obj, _ = get_or_create_venue(normalized, source_domain)
             room_name = normalized.get('room_name', '')
 
-        # Create event with venue reference
-        return cls.objects.create(
+        # Create or update event with venue reference
+        return cls.objects.update_or_create(
             source=source,
             external_id=event_data.get('external_id', ''),
-            title=event_data.get('title', ''),
-            description=event_data.get('description', ''),
-            venue=venue_obj,
-            room_name=room_name,
-            raw_place_json=raw_place_json,
-            raw_location_data=location_data,
-            organizer=event_data.get('organizer', ''),
-            event_status=event_data.get('event_status', ''),
-            event_attendance_mode=event_data.get('event_attendance_mode', ''),
-            start_time=event_data.get('start_time'),
-            end_time=event_data.get('end_time'),
-            url=event_data.get('url', ''),
-            metadata_tags=event_data.get('tags', [])
+            defaults={
+                "title": event_data.get('title', ''),
+                "description": event_data.get('description', ''),
+                "venue": venue_obj,
+                "room_name": room_name,
+                "raw_place_json": raw_place_json,
+                "raw_location_data": location_data,
+                "organizer": event_data.get('organizer', ''),
+                "event_status": event_data.get('event_status', ''),
+                "event_attendance_mode": event_data.get('event_attendance_mode', ''),
+                "start_time": event_data.get('start_time'),
+                "end_time": event_data.get('end_time'),
+                "url": event_data.get('url', ''),
+                "metadata_tags": event_data.get('tags', []),
+            }
         )
 
     class Meta:

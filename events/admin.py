@@ -40,7 +40,7 @@ def process_sources_via_collector(modeladmin, request, queryset):
                     
                     for event_data in data['events']:
                         try:
-                            # Use Schema.org aware event creation
+                            # Use Schema.org aware event creation (returns tuple)
                             Event.create_with_schema_org_data(event_data, source)
                         except Exception as e:
                             logger.error("Failed to save event: %s", e)

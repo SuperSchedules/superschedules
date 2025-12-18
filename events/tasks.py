@@ -94,7 +94,7 @@ def process_scraping_job(self, job_id: int):
 
                 for event_data in data['events']:
                     try:
-                        event = Event.create_with_schema_org_data(event_data, source)
+                        event, was_created = Event.create_with_schema_org_data(event_data, source)
                         events_created += 1
                         # Queue embedding generation
                         generate_embedding.delay(event.id)

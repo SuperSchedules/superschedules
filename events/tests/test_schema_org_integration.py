@@ -102,7 +102,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'url': 'https://example.com/event'
         }
 
-        event = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
 
         # Verify event created correctly
         self.assertEqual(event.title, 'Budding Bookworms')
@@ -140,7 +140,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-02T11:00:00+00:00'
         }
 
-        event = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
         location_search_text = event.get_location_search_text()
 
         # Should include room name, venue name, and city for RAG
@@ -166,7 +166,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-03T14:00:00+00:00'
         }
 
-        event = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
 
         # Low confidence without city - no venue created
         self.assertIsNone(event.venue)
@@ -208,7 +208,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-04T15:00:00+00:00'
         }
 
-        event = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
 
         # Venue should be created
         self.assertIsNotNone(event.venue)
@@ -246,7 +246,7 @@ class RAGLocationSearchTest(TestCase):
             'organizer': 'Needham Public Library'
         }
 
-        event = Event.create_with_schema_org_data(needham_event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(needham_event_data, self.test_source)
 
         # Test location search capabilities
         location_search_text = event.get_location_search_text()
@@ -293,8 +293,8 @@ class RAGLocationSearchTest(TestCase):
             'start_time': '2025-09-02T14:30:00+00:00'
         }
 
-        event1 = Event.create_with_schema_org_data(event1_data, self.test_source)
-        event2 = Event.create_with_schema_org_data(event2_data, self.test_source)
+        event1, _ = Event.create_with_schema_org_data(event1_data, self.test_source)
+        event2, _ = Event.create_with_schema_org_data(event2_data, self.test_source)
 
         # Should share the same Venue object (deduplication)
         self.assertEqual(event1.venue.id, event2.venue.id)
