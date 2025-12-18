@@ -467,38 +467,30 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
     key = build_venue_key(normalized)
     slug, city_lower, state_upper, postal_code = key
 
-    try:
-        venue = Venue.objects.get(
-            slug=slug,
-            city__iexact=city_lower,
-            state__iexact=state_upper,
-            postal_code=postal_code
-        )
-        # Update coordinates if venue is missing them but collector provided them
-        if venue.latitude is None and normalized.get("latitude"):
-            venue.latitude = _to_decimal(normalized.get("latitude"))
-            venue.longitude = _to_decimal(normalized.get("longitude"))
-            venue.save(update_fields=["latitude", "longitude"])
-        return venue, False
-    except Venue.DoesNotExist:
-        pass
-
-    # Create new venue
-    venue = Venue.objects.create(
-        name=normalized.get("venue_name", ""),
+    # Use update_or_create to handle race conditions atomically
+    venue, created = Venue.objects.update_or_create(
         slug=slug,
-        street_address=normalized.get("street_address", ""),
-        city=normalized.get("city", ""),
-        state=state_upper or normalized.get("state", ""),
+        city__iexact=city_lower,
+        state__iexact=state_upper,
         postal_code=postal_code,
-        country=normalized.get("country") or "US",
-        latitude=_to_decimal(normalized.get("latitude")),
-        longitude=_to_decimal(normalized.get("longitude")),
-        source_domain=source_domain,
-        raw_schema=normalized.get("raw_schema"),
+        defaults={
+            "name": normalized.get("venue_name", ""),
+            "street_address": normalized.get("street_address", ""),
+            "city": normalized.get("city", ""),
+            "state": state_upper or normalized.get("state", ""),
+            "country": normalized.get("country") or "US",
+            "source_domain": source_domain,
+            "raw_schema": normalized.get("raw_schema"),
+        }
     )
 
-    return venue, True
+    # Update coordinates if venue is missing them but collector provided them
+    if venue.latitude is None and normalized.get("latitude"):
+        venue.latitude = _to_decimal(normalized.get("latitude"))
+        venue.longitude = _to_decimal(normalized.get("longitude"))
+        venue.save(update_fields=["latitude", "longitude"])
+
+    return venue, created
 
 
 def _to_decimal(value) -> Optional[Decimal]:
