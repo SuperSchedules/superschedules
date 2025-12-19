@@ -179,6 +179,19 @@ if alb_host := os.environ.get('ALB_HOST'):
     CORS_ALLOWED_ORIGINS.append(f"http://{alb_host}")
     CORS_ALLOWED_ORIGINS.append(f"https://{alb_host}")
 
+# Allow credentials (cookies, Authorization header) in CORS requests
+CORS_ALLOW_CREDENTIALS = True
+
+# Explicitly allow Authorization header (needed for JWT auth)
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "origin",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
 CSRF_TRUSTED_ORIGINS = [
     "https://eventzombie.com",
     "https://www.eventzombie.com",
