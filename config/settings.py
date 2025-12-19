@@ -345,6 +345,7 @@ CELERY_TASK_DEFAULT_QUEUE = 'default'
 # Task routes for prioritization
 CELERY_TASK_ROUTES = {
     'events.tasks.generate_embedding': {'queue': 'embeddings'},
+    'events.tasks.generate_embeddings_batch': {'queue': 'embeddings'},
     'venues.tasks.geocode_venue': {'queue': 'geocoding'},
     'venues.tasks.geocode_venue_task': {'queue': 'geocoding'},
     'events.tasks.process_scraping_job': {'queue': 'scraping'},

@@ -128,42 +128,74 @@ def process_scraping_job(self, job_id: int):
 
 
 @shared_task
-def bulk_generate_embeddings(event_ids: list = None, force: bool = False):
+def bulk_generate_embeddings(event_ids: list = None, force: bool = False, batch_size: int = 100):
     """
-    Generate embeddings for multiple events in batch.
+    Orchestrator task that spawns batched subtasks for embedding generation.
+
+    This task doesn't do the work itself - it identifies events needing embeddings
+    and spawns batch subtasks to process them in chunks, avoiding timeouts.
 
     Args:
         event_ids: List of event IDs, or None for all events
         force: If True, regenerate ALL embeddings (clear existing first)
+        batch_size: Number of events per subtask (default 100)
     """
     from events.models import Event
-    from api.rag_service import get_rag_service
 
     if force:
-        # Clear all embeddings to force regeneration
+        # Clear embeddings to force regeneration
         if event_ids:
             Event.objects.filter(id__in=event_ids).update(embedding=None)
-            events = Event.objects.filter(id__in=event_ids)
+            ids_to_process = list(Event.objects.filter(id__in=event_ids).values_list('id', flat=True))
         else:
             Event.objects.all().update(embedding=None)
-            events = Event.objects.all()
-        logger.info(f"Force mode: cleared embeddings for {events.count()} events")
+            ids_to_process = list(Event.objects.all().values_list('id', flat=True))
+        logger.info(f"Force mode: cleared embeddings for {len(ids_to_process)} events")
     else:
         if event_ids:
-            events = Event.objects.filter(id__in=event_ids, embedding__isnull=True)
+            ids_to_process = list(Event.objects.filter(id__in=event_ids, embedding__isnull=True).values_list('id', flat=True))
         else:
-            events = Event.objects.filter(embedding__isnull=True)
+            ids_to_process = list(Event.objects.filter(embedding__isnull=True).values_list('id', flat=True))
 
-    count = events.count()
-    if count == 0:
+    total_count = len(ids_to_process)
+    if total_count == 0:
         logger.info("No events need embedding generation")
-        return {'status': 'success', 'count': 0}
+        return {'status': 'success', 'total': 0, 'batches': 0}
 
-    logger.info(f"Generating embeddings for {count} events")
-    rag_service = get_rag_service()
-    rag_service.update_event_embeddings(event_ids=list(events.values_list('id', flat=True)))
+    # Spawn batch subtasks
+    batches_created = 0
+    for i in range(0, total_count, batch_size):
+        batch_ids = ids_to_process[i:i + batch_size]
+        generate_embeddings_batch.delay(batch_ids)
+        batches_created += 1
 
-    return {'status': 'success', 'count': count}
+    logger.info(f"Spawned {batches_created} batch tasks for {total_count} events (batch_size={batch_size})")
+    return {'status': 'spawned', 'total': total_count, 'batches': batches_created}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=120)
+def generate_embeddings_batch(self, event_ids: list):
+    """
+    Process a batch of events for embedding generation.
+
+    This is a subtask spawned by bulk_generate_embeddings. Each batch is
+    small enough to complete within the task time limit.
+
+    Args:
+        event_ids: List of event IDs to process in this batch
+    """
+    from api.rag_service import get_rag_service
+
+    try:
+        logger.info(f"Processing embedding batch of {len(event_ids)} events")
+        rag_service = get_rag_service()
+        rag_service.update_event_embeddings(event_ids=event_ids)
+        logger.info(f"Completed embedding batch of {len(event_ids)} events")
+        return {'status': 'success', 'count': len(event_ids)}
+
+    except Exception as exc:
+        logger.error(f"Embedding batch failed: {exc}")
+        raise self.retry(exc=exc)
 
 
 @shared_task
