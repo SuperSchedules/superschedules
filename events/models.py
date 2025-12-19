@@ -190,11 +190,24 @@ class Event(models.Model):
         help_text="scheduled/cancelled/postponed from Schema.org"
     )
     event_attendance_mode = models.CharField(
-        max_length=50, 
+        max_length=50,
         blank=True,
         help_text="offline/online/mixed from Schema.org"
     )
-    
+
+    # Audience targeting (for RAG matching)
+    age_range = models.CharField(max_length=50, blank=True, help_text="Target age: 0-5, 6-9, 10-12, 13-18, adults, all-ages")
+    audience_tags = models.JSONField(default=list, blank=True, help_text="Audience categories: Children, Families, Teens, Seniors, etc.")
+
+    # Event logistics
+    is_cancelled = models.BooleanField(default=False, help_text="Event is cancelled")
+    is_virtual = models.BooleanField(default=False, help_text="Virtual/online event")
+    requires_registration = models.BooleanField(default=False, help_text="Registration required")
+    is_full = models.BooleanField(default=False, help_text="Registration full/waitlist")
+
+    # Quality score from collector
+    validation_score = models.FloatField(null=True, blank=True, help_text="LLM confidence in extraction (0.0-1.0)")
+
     start_time = models.DateTimeField()
     end_time = models.DateTimeField(null=True, blank=True)
     url = models.URLField(blank=True, null=True)
@@ -290,6 +303,17 @@ class Event(models.Model):
                 "organizer": event_data.get('organizer', '')[:200],
                 "event_status": event_data.get('event_status', '')[:50],
                 "event_attendance_mode": event_data.get('event_attendance_mode', '')[:50],
+                # Audience targeting
+                "age_range": event_data.get('age_range', '')[:50],
+                "audience_tags": event_data.get('audience_tags', []),
+                # Event logistics
+                "is_cancelled": event_data.get('is_cancelled', False),
+                "is_virtual": event_data.get('is_virtual', False),
+                "requires_registration": event_data.get('requires_registration', False),
+                "is_full": event_data.get('is_full', False),
+                # Quality
+                "validation_score": event_data.get('validation_score'),
+                # Core fields
                 "start_time": event_data.get('start_time'),
                 "end_time": event_data.get('end_time'),
                 "url": event_data.get('url', ''),
@@ -353,3 +377,47 @@ def queue_event_embedding(sender, instance, created, update_fields=None, **kwarg
             logger.info(f"Queued embedding generation for event: {instance.title}")
         except Exception as e:
             logger.error(f"Failed to queue embedding for event {instance.id}: {e}")
+
+
+class ChatSession(models.Model):
+    """A chat conversation session. Groups messages for context."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_sessions")
+    title = models.CharField(max_length=200, blank=True)  # Auto-generated from first message
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)  # Inactive = archived
+    context = models.JSONField(default=dict, blank=True)  # Persistent: location, preferences, etc.
+
+    class Meta:
+        ordering = ['-updated_at']
+        indexes = [models.Index(fields=['user', '-updated_at']), models.Index(fields=['user', 'is_active'])]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.title or 'Untitled'}"
+
+    def get_recent_messages(self, limit: int = 10):
+        """Get the most recent messages for LLM context."""
+        return list(self.messages.order_by('-created_at')[:limit])[::-1]
+
+
+class ChatMessage(models.Model):
+    """A single message in a chat session (user or assistant)."""
+    class Role(models.TextChoices):
+        USER = 'user', 'User'
+        ASSISTANT = 'assistant', 'Assistant'
+        SYSTEM = 'system', 'System'
+
+    session = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name="messages")
+    role = models.CharField(max_length=20, choices=Role.choices)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)  # Token counts, model used, etc.
+    referenced_events = models.ManyToManyField(Event, blank=True, related_name="chat_references")
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [models.Index(fields=['session', 'created_at'])]
+
+    def __str__(self):
+        preview = self.content[:50] + "..." if len(self.content) > 50 else self.content
+        return f"{self.role}: {preview}"

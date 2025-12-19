@@ -128,20 +128,31 @@ def process_scraping_job(self, job_id: int):
 
 
 @shared_task
-def bulk_generate_embeddings(event_ids: list = None):
+def bulk_generate_embeddings(event_ids: list = None, force: bool = False):
     """
     Generate embeddings for multiple events in batch.
 
     Args:
-        event_ids: List of event IDs, or None for all events missing embeddings
+        event_ids: List of event IDs, or None for all events
+        force: If True, regenerate ALL embeddings (clear existing first)
     """
     from events.models import Event
     from api.rag_service import get_rag_service
 
-    if event_ids:
-        events = Event.objects.filter(id__in=event_ids, embedding__isnull=True)
+    if force:
+        # Clear all embeddings to force regeneration
+        if event_ids:
+            Event.objects.filter(id__in=event_ids).update(embedding=None)
+            events = Event.objects.filter(id__in=event_ids)
+        else:
+            Event.objects.all().update(embedding=None)
+            events = Event.objects.all()
+        logger.info(f"Force mode: cleared embeddings for {events.count()} events")
     else:
-        events = Event.objects.filter(embedding__isnull=True)
+        if event_ids:
+            events = Event.objects.filter(id__in=event_ids, embedding__isnull=True)
+        else:
+            events = Event.objects.filter(embedding__isnull=True)
 
     count = events.count()
     if count == 0:

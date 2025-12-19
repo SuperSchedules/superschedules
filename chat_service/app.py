@@ -25,7 +25,7 @@ from ninja_jwt.tokens import AccessToken
 from ninja_jwt.exceptions import InvalidToken, TokenError
 from django.contrib.auth.models import User
 
-from events.models import Event
+from events.models import Event, ChatSession, ChatMessage
 from api.llm_service import get_llm_service, create_event_discovery_prompt
 from api.rag_service import get_rag_service
 from . import debug_routes
@@ -65,7 +65,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     context: Dict[str, Any] = {}
-    session_id: str | None = None
+    session_id: int | None = None  # Changed to int to match DB
     model_a: str | None = None
     model_b: str | None = None
     single_model_mode: bool = True  # Default to single model mode
@@ -80,6 +80,7 @@ class StreamChunk(BaseModel):
     suggested_event_ids: List[int] = []
     follow_up_questions: List[str] = []
     response_time_ms: int | None = None
+    session_id: int | None = None  # Return session ID to frontend
 
 
 class JWTClaims(BaseModel):
@@ -161,6 +162,48 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     except KeyError as e:
         raise HTTPException(status_code=401, detail=f"Missing required claim: {str(e)}")
+
+
+# =============================================================================
+# Session Management Helpers
+# =============================================================================
+
+@sync_to_async
+def get_or_create_session(user_id: int, session_id: int | None) -> ChatSession:
+    """Get existing session or create new one."""
+    if session_id:
+        try:
+            return ChatSession.objects.get(id=session_id, user_id=user_id)
+        except ChatSession.DoesNotExist:
+            logger.warning(f"Session {session_id} not found for user {user_id}, creating new")
+    return ChatSession.objects.create(user_id=user_id)
+
+
+@sync_to_async
+def get_conversation_history(session: ChatSession, limit: int = 10) -> List[Dict]:
+    """Get recent messages formatted for LLM context."""
+    messages = session.get_recent_messages(limit=limit)
+    return [{"role": msg.role, "content": msg.content} for msg in messages]
+
+
+@sync_to_async
+def save_message(session: ChatSession, role: str, content: str, metadata: dict = None, event_ids: List[int] = None) -> ChatMessage:
+    """Save a message to the session."""
+    msg = ChatMessage.objects.create(
+        session=session,
+        role=role,
+        content=content,
+        metadata=metadata or {}
+    )
+    if event_ids:
+        msg.referenced_events.set(event_ids)
+
+    # Auto-generate title from first user message
+    if role == 'user' and not session.title:
+        session.title = content[:50] + ("..." if len(content) > 50 else "")
+        session.save(update_fields=['title', 'updated_at'])
+
+    return msg
 
 
 @app.get("/api/v1/chat/health")
@@ -252,16 +295,30 @@ async def stream_chat(
     jwt_claims: JWTClaims = Depends(verify_jwt_token)
 ):
     """
-    Stream dual LLM responses for A/B testing.
-    
-    Returns Server-Sent Events (SSE) with incremental tokens from both models.
+    Stream LLM responses with conversation memory.
+
+    Returns Server-Sent Events (SSE) with incremental tokens.
+    Stores messages in ChatSession for conversation history.
     """
-    
+
+    # Get or create session BEFORE the generator (so we have session_id)
+    session = await get_or_create_session(jwt_claims.user_id, request.session_id)
+
+    # Get conversation history for context
+    conversation_history = await get_conversation_history(session, limit=10)
+
+    # Save user message
+    await save_message(session, 'user', request.message)
+
     async def generate_stream():
+        full_response = ""  # Track full response for saving
+        response_time_ms = None
+        model_name_used = None
+
         try:
             # Get LLM service
             llm_service = get_llm_service()
-            
+
             # Quick health check - get available models (with timeout)
             try:
                 available_models = await asyncio.wait_for(llm_service.get_available_models(), timeout=10)
@@ -273,34 +330,42 @@ async def stream_chat(
                 logger.warning("Ollama health check timed out")
             except Exception as e:
                 logger.warning("Ollama health check failed: %s", e)
-            
+
             # Get relevant events for context (using frontend filters if provided)
             relevant_events = await get_relevant_events(request.message, request.context)
 
+            # Add conversation history to context for LLM prompt
+            enhanced_context = {**request.context, 'chat_history': conversation_history}
+
             if request.single_model_mode:
-                # Single model mode - force DeepSeek (ignore frontend preference for now)
-                model_name = llm_service.primary_model  # Always use primary model
-                model_id = "A"  # Always use A for single mode (the DeepSeek model)
-                
+                # Single model mode
+                model_name_used = llm_service.primary_model
+                model_id = "A"
+
                 # Use retry mechanism for better reliability
                 model_generator = stream_model_response_with_retry(
                     llm_service,
                     request.message,
                     relevant_events,
-                    model_name=model_name,
+                    model_name=model_name_used,
                     model_id=model_id,
-                    max_retries=1,  # One retry for better responsiveness
-                    user_context=request.context
+                    max_retries=1,
+                    user_context=enhanced_context
                 )
-                
+
                 # Stream from single model
                 chunk_count = 0
                 try:
                     async for chunk in model_generator:
                         chunk_count += 1
+                        # Accumulate response for saving
+                        if chunk.token:
+                            full_response += chunk.token
+                        if chunk.response_time_ms:
+                            response_time_ms = chunk.response_time_ms
+
                         yield f"data: {json.dumps(chunk.dict())}\n\n"
-                        
-                        # Log progress periodically
+
                         if chunk_count % 50 == 0:
                             logger.debug("Streaming progress: %d chunks sent for %s", chunk_count, model_id)
 
@@ -308,22 +373,22 @@ async def stream_chat(
                     logger.error("Stream error after %d chunks for %s: %s: %s", chunk_count, model_id,
                                type(e).__name__, e)
                     error_chunk = StreamChunk(
-                        model=model_id, 
-                        token="", 
-                        done=True, 
+                        model=model_id,
+                        token="",
+                        done=True,
                         error=f"Stream interrupted after {chunk_count} chunks: {str(e)}"
                     )
                     yield f"data: {json.dumps(error_chunk.dict())}\n\n"
-                
+
             else:
-                # A/B testing mode - use both models
+                # A/B testing mode - use both models (simplified, no session tracking for A/B)
                 model_a_generator = stream_model_response(
                     llm_service,
                     request.message,
                     relevant_events,
                     model_name=request.model_a,
                     model_id="A",
-                    user_context=request.context
+                    user_context=enhanced_context
                 )
 
                 model_b_generator = stream_model_response(
@@ -332,48 +397,61 @@ async def stream_chat(
                     relevant_events,
                     model_name=request.model_b,
                     model_id="B",
-                    user_context=request.context
+                    user_context=enhanced_context
                 )
-                
-                # Stream responses from both models concurrently
+
                 async def stream_model(model_generator, model_id):
+                    nonlocal full_response
                     try:
                         async for chunk in model_generator:
+                            # Only track model A response for saving
+                            if model_id == "A" and chunk.token:
+                                full_response += chunk.token
                             yield f"data: {json.dumps(chunk.dict())}\n\n"
                     except Exception as e:
                         error_chunk = StreamChunk(
-                            model=model_id, 
-                            token="", 
-                            done=True, 
+                            model=model_id,
+                            token="",
+                            done=True,
                             error=str(e)
                         )
                         yield f"data: {json.dumps(error_chunk.dict())}\n\n"
-                
-                # Create async generators for both models
+
                 model_a_stream = stream_model(model_a_generator, "A")
                 model_b_stream = stream_model(model_b_generator, "B")
-                
-                # Stream from both models concurrently
+
                 async for item in merge_async_generators(model_a_stream, model_b_stream):
                     yield item
-            
-            # Send final completion marker
+
+            # Save assistant response to session
+            if full_response:
+                await save_message(
+                    session,
+                    'assistant',
+                    full_response,
+                    metadata={'model': model_name_used, 'response_time_ms': response_time_ms},
+                    event_ids=[e['id'] for e in relevant_events[:5]] if relevant_events else None
+                )
+
+            # Send final completion marker with session_id
             final_chunk = StreamChunk(
                 model="SYSTEM",
                 token="",
-                done=True
+                done=True,
+                session_id=session.id
             )
             yield f"data: {json.dumps(final_chunk.dict())}\n\n"
-            
+
         except Exception as e:
             error_chunk = StreamChunk(
                 model="SYSTEM",
                 token="",
                 done=True,
-                error=f"Stream error: {str(e)}"
+                error=f"Stream error: {str(e)}",
+                session_id=session.id
             )
             yield f"data: {json.dumps(error_chunk.dict())}\n\n"
-    
+
     return StreamingResponse(
         generate_stream(),
         media_type="text/plain",
@@ -402,28 +480,33 @@ async def stream_model_response(
         context_events: Events retrieved from RAG
         model_name: Model to use (defaults to primary/backup based on model_id)
         model_id: "A" or "B" for A/B testing
-        user_context: Frontend context (location, date_range, age_range, max_price, preferences)
+        user_context: Frontend context (location, date_range, preferences, chat_history)
     """
     try:
         # Use default models if not specified
         if model_name is None:
             model_name = llm_service.primary_model if model_id == "A" else llm_service.backup_model
 
-        # Extract location and preferences from user context
+        # Extract location, preferences, and conversation history from user context
         location = None
         preferences = {}
+        conversation_history = []
         if user_context:
             location = user_context.get('location')
             preferences = user_context.get('preferences', {})
+            conversation_history = user_context.get('chat_history', [])
 
-        # Create system and user prompts
+        # Create system and user prompts with full context
         current_time = datetime.now()
         system_prompt, user_prompt = create_event_discovery_prompt(
-            message, context_events, {
+            message=message,
+            events=context_events,
+            context={
                 'current_date': current_time.strftime('%A, %B %d, %Y at %I:%M %p'),
                 'location': location,
-                'preferences': preferences
-            }
+            },
+            conversation_history=conversation_history,
+            user_preferences=preferences,
         )
         
         full_response = ""
@@ -482,21 +565,24 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
 
     Args:
         message: User's search message
-        context: Optional context with filters (location, date_range, age_range, max_price)
+        context: Optional context with filters (location, date_range, is_virtual, user_location, etc.)
     """
     try:
         # Use RAG service for semantic search
         rag_service = get_rag_service()
 
         # Run RAG in thread since sentence transformers is CPU-bound
-        import asyncio
         loop = asyncio.get_event_loop()
 
-        # Calculate time filter and extract location from context
+        # Calculate time filter and extract filters from context
         time_filter_days = 14  # Default: 2 weeks
         date_from = None
         date_to = None
         location = None
+        is_virtual = None
+        max_distance_miles = None
+        user_lat = None
+        user_lng = None
 
         if context:
             # Extract location from context
@@ -515,6 +601,16 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
                 if date_from or date_to:
                     time_filter_days = None
 
+            # NEW: Virtual/in-person filter
+            is_virtual = context.get('is_virtual')  # True, False, or None
+
+            # NEW: Geo-distance filter
+            max_distance_miles = context.get('max_distance_miles')
+            user_location = context.get('user_location')
+            if user_location:
+                user_lat = user_location.get('lat')
+                user_lng = user_location.get('lng')
+
         def run_rag_search():
             return rag_service.get_context_events(
                 user_message=message,
@@ -523,7 +619,11 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
                 time_filter_days=time_filter_days,
                 date_from=date_from,
                 date_to=date_to,
-                location=location
+                location=location,
+                is_virtual=is_virtual,
+                max_distance_miles=max_distance_miles,
+                user_lat=user_lat,
+                user_lng=user_lng,
             )
 
         context_events = await loop.run_in_executor(None, run_rag_search)

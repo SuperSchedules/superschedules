@@ -26,6 +26,8 @@ from events.models import (
     SiteStrategy,
     ScrapingJob,
     ScrapeBatch,
+    ChatSession,
+    ChatMessage,
 )
 from venues.models import Venue
 from api.auth import ServiceTokenAuth
@@ -1084,3 +1086,164 @@ def _trigger_collection(source):
     )
 
     logger.info(f"Created scraping job {job.id} for source {source.id} ({source.base_url})")
+
+
+# =============================================================================
+# Chat Session API - Conversation Memory
+# =============================================================================
+
+class ChatMessageSchema(Schema):
+    id: int
+    role: str
+    content: str
+    created_at: datetime
+    metadata: dict = {}
+
+
+class ChatSessionSchema(Schema):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool
+    context: dict = {}
+    message_count: int = 0
+
+    @staticmethod
+    def resolve_message_count(obj):
+        return obj.messages.count()
+
+
+class ChatSessionDetailSchema(Schema):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool
+    context: dict = {}
+    messages: List[ChatMessageSchema] = []
+
+    @staticmethod
+    def resolve_messages(obj):
+        return list(obj.messages.order_by('created_at')[:50])
+
+
+class CreateSessionSchema(Schema):
+    title: str = ""
+    context: dict = {}
+
+
+class UpdateSessionSchema(Schema):
+    title: str | None = None
+    context: dict | None = None
+
+
+class AddMessageSchema(Schema):
+    role: str  # 'user' or 'assistant'
+    content: str
+    metadata: dict = {}
+    event_ids: List[int] = []
+
+
+@router.get("/chat/sessions", auth=JWTAuth(), response=List[ChatSessionSchema])
+def list_chat_sessions(request, active_only: bool = True, limit: int = 20):
+    """List user's chat sessions, most recent first."""
+    qs = ChatSession.objects.filter(user=request.user)
+    if active_only:
+        qs = qs.filter(is_active=True)
+    return list(qs.order_by('-updated_at')[:limit])
+
+
+@router.post("/chat/sessions", auth=JWTAuth(), response={201: ChatSessionSchema})
+def create_chat_session(request, payload: CreateSessionSchema):
+    """Create a new chat session."""
+    session = ChatSession.objects.create(
+        user=request.user,
+        title=payload.title or "",
+        context=payload.context or {}
+    )
+    return 201, session
+
+
+@router.get("/chat/sessions/{session_id}", auth=JWTAuth(), response=ChatSessionDetailSchema)
+def get_chat_session(request, session_id: int):
+    """Get session with messages."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    return session
+
+
+@router.put("/chat/sessions/{session_id}", auth=JWTAuth(), response=ChatSessionSchema)
+def update_chat_session(request, session_id: int, payload: UpdateSessionSchema):
+    """Update session title or context."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    if payload.title is not None:
+        session.title = payload.title
+    if payload.context is not None:
+        session.context = payload.context
+    session.save()
+    return session
+
+
+@router.post("/chat/sessions/{session_id}/archive", auth=JWTAuth())
+def archive_chat_session(request, session_id: int):
+    """Archive (soft-delete) a session."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    session.is_active = False
+    session.save()
+    return {"status": "archived", "session_id": session_id}
+
+
+@router.delete("/chat/sessions/{session_id}", auth=JWTAuth(), response={204: None})
+def delete_chat_session(request, session_id: int):
+    """Permanently delete a session and all its messages."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    session.delete()
+    return 204, None
+
+
+@router.get("/chat/sessions/{session_id}/messages", auth=JWTAuth(), response=List[ChatMessageSchema])
+def get_session_messages(request, session_id: int, limit: int = 50, offset: int = 0):
+    """Get messages for a session with pagination."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    messages = session.messages.order_by('created_at')[offset:offset + limit]
+    return list(messages)
+
+
+@router.post("/chat/sessions/{session_id}/messages", auth=JWTAuth(), response={201: ChatMessageSchema})
+def add_session_message(request, session_id: int, payload: AddMessageSchema):
+    """Add a message to a session (used by chat service or for manual additions)."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+
+    # Validate role
+    if payload.role not in ['user', 'assistant', 'system']:
+        raise HttpError(400, "Invalid role. Must be 'user', 'assistant', or 'system'")
+
+    message = ChatMessage.objects.create(
+        session=session,
+        role=payload.role,
+        content=payload.content,
+        metadata=payload.metadata or {}
+    )
+
+    # Link referenced events
+    if payload.event_ids:
+        events = Event.objects.filter(id__in=payload.event_ids)
+        message.referenced_events.set(events)
+
+    # Auto-generate title from first user message
+    if payload.role == 'user' and not session.title:
+        session.title = payload.content[:50] + ("..." if len(payload.content) > 50 else "")
+        session.save(update_fields=['title', 'updated_at'])
+
+    return 201, message
+
+
+@router.get("/chat/sessions/{session_id}/history", auth=JWTAuth())
+def get_session_history_for_llm(request, session_id: int, limit: int = 10):
+    """Get recent messages formatted for LLM context."""
+    session = get_object_or_404(ChatSession, id=session_id, user=request.user)
+    messages = session.get_recent_messages(limit=limit)
+    return {
+        "session_id": session_id,
+        "messages": [{"role": msg.role, "content": msg.content} for msg in messages]
+    }

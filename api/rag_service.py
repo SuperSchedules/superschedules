@@ -56,25 +56,52 @@ class EventRAGService:
             self.model = SentenceTransformer(self.model_name)
     
     def _create_event_text(self, event: Event) -> str:
-        """Create searchable text representation of an event."""
+        """Create searchable text representation of an event for embedding."""
         parts = [
             clean_html_content(event.title),
             clean_html_content(event.description or ""),
-            clean_html_content(event.get_location_search_text()),  # Use rich location data
+            clean_html_content(event.get_location_search_text()),
         ]
-        
-        # Add temporal context
+
+        # Temporal context
         if event.start_time:
-            # Add day of week and time info for better matching
             day_name = event.start_time.strftime("%A")
             time_desc = event.start_time.strftime("%I:%M %p")
-            parts.append(f"{day_name} {time_desc}")
-            
-            # Add seasonal/monthly context
             month_name = event.start_time.strftime("%B")
-            parts.append(month_name)
-        
+            parts.append(f"{day_name} {time_desc} {month_name}")
+
+        # Age range with semantic expansion for better matching
+        if event.age_range:
+            age_text = self._expand_age_range(event.age_range)
+            parts.append(age_text)
+
+        # Audience tags (e.g., "Children", "Families", "Seniors")
+        if event.audience_tags:
+            parts.append(" ".join(event.audience_tags))
+
+        # Metadata tags (e.g., "outdoor", "music", "free")
+        if event.metadata_tags:
+            parts.append(" ".join(event.metadata_tags))
+
+        # Virtual/in-person indicator
+        if event.is_virtual:
+            parts.append("virtual online remote")
+        elif event.event_attendance_mode == "offline":
+            parts.append("in-person")
+
         return " ".join(filter(None, parts))
+
+    def _expand_age_range(self, age_range: str) -> str:
+        """Expand age range codes into semantic text for better embedding matches."""
+        expansions = {
+            "0-5": "babies toddlers preschool young children ages 0-5",
+            "6-9": "kids children elementary school ages 6-9",
+            "10-12": "tweens preteens middle school ages 10-12",
+            "13-18": "teens teenagers high school young adults ages 13-18",
+            "adults": "adults grown-ups 18+",
+            "all-ages": "all ages family friendly everyone",
+        }
+        return expansions.get(age_range, f"ages {age_range}")
     
     def update_event_embeddings(self, event_ids: List[int] = None):
         """Update embeddings for specified events or all events."""
@@ -117,7 +144,11 @@ class EventRAGService:
         location_filter: str = None,
         only_future_events: bool = True,
         date_from: datetime = None,
-        date_to: datetime = None
+        date_to: datetime = None,
+        is_virtual: bool = None,
+        max_distance_miles: float = None,
+        user_lat: float = None,
+        user_lng: float = None,
     ) -> List[Tuple[Event, float]]:
         """
         Perform semantic search for events using PostgreSQL vector operations.
@@ -130,6 +161,10 @@ class EventRAGService:
             only_future_events: Only include events that haven't started yet
             date_from: Explicit start of date range (overrides time_filter_days)
             date_to: Explicit end of date range (overrides time_filter_days)
+            is_virtual: Filter by virtual (True), in-person (False), or any (None)
+            max_distance_miles: Maximum distance from user location
+            user_lat: User's latitude for distance calculation
+            user_lng: User's longitude for distance calculation
 
         Returns:
             List of (Event, similarity_score) tuples
@@ -145,6 +180,10 @@ class EventRAGService:
         # Build WHERE conditions for the filters
         where_conditions = ["embedding IS NOT NULL"]
         params = []
+
+        # Always exclude cancelled and full events
+        where_conditions.append("is_cancelled = FALSE")
+        where_conditions.append("is_full = FALSE")
 
         # Filter out past events by default
         if only_future_events:
@@ -164,6 +203,11 @@ class EventRAGService:
             where_conditions.append("start_time <= %s")
             params.append(end_date)
 
+        # Filter by virtual/in-person preference
+        if is_virtual is not None:
+            where_conditions.append("is_virtual = %s")
+            params.append(is_virtual)
+
         # Apply location filter (search venue name, city, or room_name)
         if location_filter:
             where_conditions.append(
@@ -172,6 +216,22 @@ class EventRAGService:
             params.append(f"%{location_filter}%")
             params.append(f"%{location_filter}%")
             params.append(f"%{location_filter}%")
+
+        # Geo-distance filter using Haversine formula
+        if max_distance_miles and user_lat is not None and user_lng is not None:
+            # Haversine formula in SQL (returns miles)
+            # Only include events with venues that have lat/lng
+            where_conditions.append("""
+                venue_id IN (
+                    SELECT id FROM venues_venue
+                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                    AND (3959 * acos(
+                        cos(radians(%s)) * cos(radians(latitude)) * cos(radians(longitude) - radians(%s)) +
+                        sin(radians(%s)) * sin(radians(latitude))
+                    )) <= %s
+                )
+            """)
+            params.extend([user_lat, user_lng, user_lat, max_distance_miles])
         
         where_clause = " AND ".join(where_conditions)
         
@@ -218,7 +278,11 @@ class EventRAGService:
         time_filter_days: int = 30,
         date_from: datetime = None,
         date_to: datetime = None,
-        location: str = None
+        location: str = None,
+        is_virtual: bool = None,
+        max_distance_miles: float = None,
+        user_lat: float = None,
+        user_lng: float = None,
     ) -> List[Dict[str, Any]]:
         """
         Get relevant future events for LLM context based on user message.
@@ -231,6 +295,10 @@ class EventRAGService:
             date_from: Explicit start of date range
             date_to: Explicit end of date range
             location: Explicit location filter (overrides message extraction)
+            is_virtual: Filter by virtual (True), in-person (False), or any (None)
+            max_distance_miles: Maximum distance from user location
+            user_lat: User's latitude for distance calculation
+            user_lng: User's longitude for distance calculation
 
         Returns:
             List of event dictionaries for LLM context
@@ -243,17 +311,21 @@ class EventRAGService:
                 location_hints = self._extract_location_hints(user_message)
                 location_filter = location_hints[0] if location_hints else None
 
-            # Perform semantic search with time filtering
+            # Perform semantic search with all filters
             results = self.semantic_search(
                 query=user_message,
                 top_k=max_events * 2,  # Get more results to filter
                 time_filter_days=time_filter_days,
                 location_filter=location_filter,
-                only_future_events=True,  # Only show events that haven't started
+                only_future_events=True,
                 date_from=date_from,
-                date_to=date_to
+                date_to=date_to,
+                is_virtual=is_virtual,
+                max_distance_miles=max_distance_miles,
+                user_lat=user_lat,
+                user_lng=user_lng,
             )
-            
+
             # Filter by similarity threshold and format for LLM
             context_events = []
             for event, score in results:
@@ -262,12 +334,17 @@ class EventRAGService:
                         'id': event.id,
                         'title': clean_html_content(event.title),
                         'description': clean_html_content(event.description),
-                        'location': clean_html_content(event.get_location_string()),  # Display location
-                        'room_name': event.room_name or '',  # Room within venue
-                        'full_address': event.get_full_address(),  # Rich address data
-                        'city': event.get_city(),  # Extracted city
-                        'organizer': event.organizer,  # Schema.org organizer
-                        'event_status': event.event_status,  # Schema.org event status
+                        'location': clean_html_content(event.get_location_string()),
+                        'room_name': event.room_name or '',
+                        'full_address': event.get_full_address(),
+                        'city': event.get_city(),
+                        'organizer': event.organizer,
+                        'event_status': event.event_status,
+                        # New fields for richer context
+                        'age_range': event.age_range or '',
+                        'audience_tags': event.audience_tags or [],
+                        'is_virtual': event.is_virtual,
+                        'requires_registration': event.requires_registration,
                         'start_time': event.start_time.isoformat() if event.start_time else None,
                         'end_time': event.end_time.isoformat() if event.end_time else None,
                         'url': event.url,
