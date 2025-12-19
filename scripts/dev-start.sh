@@ -16,7 +16,6 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 FRONTEND_DIR="/home/gregk/superschedules_frontend"
-NAVIGATOR_DIR="/home/gregk/superschedules_navigator"
 
 # Parse command-line arguments
 SHOW_LOGS=false
@@ -37,7 +36,6 @@ done
 # Service ports
 DJANGO_PORT=8000
 CHAT_PORT=8002
-NAVIGATOR_PORT=8004
 FRONTEND_PORT=5173
 
 # PID file for cleanup
@@ -225,33 +223,6 @@ start_chat_service() {
     fi
 }
 
-start_navigator() {
-    print_status "Navigator Service" "starting" "Starting navigator service..."
-
-    if [[ ! -d "$NAVIGATOR_DIR" ]]; then
-        print_status "Navigator Service" "error" "Navigator directory not found: $NAVIGATOR_DIR"
-        return 1
-    fi
-
-    cd "$NAVIGATOR_DIR"
-
-    if [[ ! -d ".venv" ]]; then
-        print_status "Navigator Service" "error" "Virtual environment not found in navigator"
-        return 1
-    fi
-
-    .venv/bin/python start_api.py --port $NAVIGATOR_PORT >/dev/null 2>&1 &
-    local pid=$!
-    echo "$pid" >> "$PID_FILE"
-
-    if wait_for_service "http://localhost:$NAVIGATOR_PORT/health" "Navigator Service"; then
-        print_status "Navigator Service" "success" "Running on http://localhost:$NAVIGATOR_PORT"
-        return 0
-    else
-        return 1
-    fi
-}
-
 start_frontend() {
     print_status "Frontend" "starting" "Starting React development server..."
 
@@ -291,10 +262,9 @@ start_frontend() {
 print_dashboard() {
     echo -e "\n${GREEN}🎉 All services started successfully!${NC}\n"
     echo -e "${BLUE}📊 Service Dashboard:${NC}"
-    echo -e "  Frontend:          http://localhost:$FRONTEND_PORT"
-    echo -e "  Django API:        http://localhost:$DJANGO_PORT"
-    echo -e "  Chat Service:      http://localhost:$CHAT_PORT"
-    echo -e "  Navigator Service: http://localhost:$NAVIGATOR_PORT"
+    echo -e "  Frontend:     http://localhost:$FRONTEND_PORT"
+    echo -e "  Django API:   http://localhost:$DJANGO_PORT"
+    echo -e "  Chat Service: http://localhost:$CHAT_PORT"
     echo -e "\n${BLUE}📋 Service logs: $LOG_DIR/${NC}"
     echo -e "  tail -f $LOG_DIR/django.log"
     echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}\n"
@@ -312,7 +282,6 @@ main() {
     if ! check_ollama; then exit 1; fi
     if ! start_django; then exit 1; fi
     if ! start_chat_service; then exit 1; fi
-    if ! start_navigator; then exit 1; fi
     if ! start_frontend; then exit 1; fi
 
     print_dashboard
