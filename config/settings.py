@@ -316,6 +316,7 @@ else:
 
 # Results stored via django-celery-results
 CELERY_RESULT_BACKEND = 'django-db'
+CELERY_RESULT_EXTENDED = True  # Store task name, args, kwargs, worker in results
 
 # Celery Beat scheduler uses database
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
