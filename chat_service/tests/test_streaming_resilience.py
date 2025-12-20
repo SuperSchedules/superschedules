@@ -16,22 +16,34 @@ from chat_service.app import app
 
 class StreamingResilienceTests(TestCase):
     """Test streaming resilience and error recovery."""
-    
+
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
-            username="resilience-test@example.com", 
-            email="resilience-test@example.com", 
+            username="resilience-test@example.com",
+            email="resilience-test@example.com",
             password="testpass123"
         )
         refresh = RefreshToken.for_user(self.user)
         self.jwt = str(refresh.access_token)
         self.client = TestClient(app)
 
+    def _setup_session_mocks(self, mock_session, mock_save, mock_history):
+        """Helper to set up session management mocks."""
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_timeout_recovery(self, mock_get_llm, mock_get_events):
+    def test_streaming_timeout_recovery(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test that streaming timeouts are handled gracefully."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         # Mock LLM service that times out
@@ -86,10 +98,14 @@ class StreamingResilienceTests(TestCase):
         self.assertTrue(error_found or len(chunks) > 2, 
                        "Should handle timeouts gracefully with error reporting or retries")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_malformed_chunk_recovery(self, mock_get_llm, mock_get_events):
+    def test_streaming_malformed_chunk_recovery(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test that malformed chunks don't break the stream."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         mock_service = MagicMock()
@@ -139,10 +155,14 @@ class StreamingResilienceTests(TestCase):
         self.assertTrue(system_completion, "Should complete with SYSTEM marker")
         self.assertGreater(content_chunks, 0, "Should receive content chunks despite potential malformed data")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_ollama_health_check_failure(self, mock_get_llm, mock_get_events):
+    def test_ollama_health_check_failure(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test behavior when Ollama health check fails."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         mock_service = MagicMock()
@@ -189,11 +209,15 @@ class StreamingResilienceTests(TestCase):
         self.assertTrue(content_found, "Should receive content despite health check failure")
         self.assertTrue(completion_found, "Should complete successfully")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.stream_model_response")
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_retry_success_after_failure(self, mock_get_llm, mock_stream_model, mock_get_events):
+    def test_streaming_retry_success_after_failure(self, mock_get_llm, mock_stream_model, mock_get_events, mock_history, mock_save, mock_session):
         """Test that retry mechanism works when first attempt fails."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         mock_service = MagicMock()
@@ -245,10 +269,14 @@ class StreamingResilienceTests(TestCase):
         
         self.assertTrue(retry_content_found, "Should receive content from successful retry")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_complete_failure_after_retries(self, mock_get_llm, mock_get_events):
+    def test_streaming_complete_failure_after_retries(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test behavior when all retry attempts fail."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         mock_service = MagicMock()
@@ -292,10 +320,14 @@ class StreamingResilienceTests(TestCase):
         self.assertTrue(error_found or system_completion, 
                        "Should provide error feedback or system completion after all retries fail")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_partial_response_preservation(self, mock_get_llm, mock_get_events):
+    def test_streaming_partial_response_preservation(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test that partial responses are preserved on failure."""
+        self._setup_session_mocks(mock_session, mock_save, mock_history)
         mock_get_events.return_value = []
         
         mock_service = MagicMock()

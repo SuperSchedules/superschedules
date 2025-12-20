@@ -1,7 +1,7 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -25,9 +25,19 @@ class FastAPIServiceTests(TestCase):
         assert data["status"] == "healthy"
         assert data["service"] == "chat_service"
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_stream_chat_single_model(self, mock_get_llm, mock_get_events):
+    def test_stream_chat_single_model(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+
         # Relevant events for context (minimal)
         mock_get_events.return_value = [
             {"id": 1, "title": "E1", "description": "d", "location": "l", "start_time": None, "end_time": None}

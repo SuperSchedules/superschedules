@@ -63,7 +63,7 @@ class RAGLLMIntegrationTest(TestCase):
     
     def test_llm_prompt_format_with_events(self):
         """Test that events are properly formatted in the LLM prompt"""
-        
+
         # Create sample events data (as would come from RAG)
         sample_events = [
             {
@@ -75,7 +75,7 @@ class RAGLLMIntegrationTest(TestCase):
                 'url': 'https://needham.library/storytime'
             }
         ]
-        
+
         query = "activities for kids in needham"
         system_prompt, user_prompt = create_event_discovery_prompt(
             query, sample_events, {
@@ -84,29 +84,29 @@ class RAGLLMIntegrationTest(TestCase):
                 'preferences': {}
             }
         )
-        
-        # Verify proper formatting
-        self.assertIn("1. Kids Story Time", user_prompt, "Event should be numbered")
+
+        # Verify proper formatting (events are bold in markdown)
+        self.assertIn("1. **Kids Story Time**", user_prompt, "Event should be numbered and bold")
         self.assertIn("Needham Library", user_prompt, "Location should be included")
-        self.assertIn("January 15", user_prompt, "Date should be formatted") 
+        self.assertIn("January 15", user_prompt, "Date should be formatted")
         self.assertIn("10:00 AM", user_prompt, "Time should be formatted")
         self.assertIn("needham.library", user_prompt, "URL should be included")
-        
+
         # Verify system prompt has correct instructions
-        self.assertIn("DO NOT invent events not listed in the prompt", system_prompt)
-        self.assertIn("you MUST recommend them", system_prompt)
-        self.assertIn("CRITICAL INSTRUCTIONS", system_prompt)
-        
+        self.assertIn("Never invent", system_prompt)
+        self.assertIn("ONLY reference events explicitly listed", system_prompt)
+        self.assertIn("CORE BEHAVIOR", system_prompt)
+
         # Most importantly: verify there's no "no events" message
-        self.assertNotIn("No matching upcoming events found", user_prompt)
+        self.assertNotIn("No events found matching this search", user_prompt)
         self.assertNotIn("don't see any upcoming events", user_prompt)
     
     def test_empty_events_handling(self):
         """Test behavior when RAG truly finds no events"""
-        
-        query = "activities for kids in mars" 
+
+        query = "activities for kids in mars"
         empty_events = []
-        
+
         system_prompt, user_prompt = create_event_discovery_prompt(
             query, empty_events, {
                 'current_date': '2025-01-13T20:00:00',
@@ -114,24 +114,26 @@ class RAGLLMIntegrationTest(TestCase):
                 'preferences': {}
             }
         )
-        
-        # When no events found, should have appropriate message
-        self.assertIn("(No matching upcoming events found in database)", user_prompt)
-        self.assertIn("Do not invent any events", user_prompt)
-        
-        # System prompt should have instruction for no events case  
-        self.assertIn('ONLY say "no events" if the prompt explicitly shows "(No matching upcoming events found in database)"', system_prompt)
+
+        # When no events found, should have appropriate message and guidance
+        self.assertIn("[No events found matching this search]", user_prompt)
+        self.assertIn("ask the user questions", user_prompt)
+        self.assertIn("What area/town are they in?", user_prompt)
+
+        # System prompt should have instruction not to invent events
+        self.assertIn("Never invent", system_prompt)
+        self.assertIn("If there are no matching events, say so clearly", system_prompt)
 
 
 class MockLLMStreamTest(TestCase):
     """Test LLM streaming with mocked responses"""
-    
+
     def test_prompt_contains_provided_events(self):
         """
         Test that when events are provided, they appear correctly in the prompt.
         This verifies the prompt generation works without mocking LLM responses.
         """
-        
+
         # Create real event data (what RAG would return)
         events = [
             {
@@ -144,33 +146,34 @@ class MockLLMStreamTest(TestCase):
                 'url': 'https://needham.gov/kids-festival'
             }
         ]
-        
+
         query = "events for kids in needham"
-        
+
         # Create prompt with events
         system_prompt, user_prompt = create_event_discovery_prompt(
             query, events, {'current_date': 'Wednesday, January 15, 2025 at 08:00 PM'}
         )
-        
+
         # Verify system prompt has strong instructions
-        self.assertIn("CRITICAL INSTRUCTIONS", system_prompt)
-        self.assertIn("you MUST recommend them", system_prompt)
-        self.assertIn("NEVER say \"no events found\" if events are listed", system_prompt)
-        
+        self.assertIn("CORE BEHAVIOR", system_prompt)
+        self.assertIn("ONLY reference events explicitly listed", system_prompt)
+        self.assertIn("Never invent", system_prompt)
+
         # Verify user prompt contains the event details
         self.assertIn("Needham Kids Festival", user_prompt)
         self.assertIn("Needham Town Common", user_prompt)
         self.assertIn("Annual festival with activities for children", user_prompt)
         self.assertIn("Thursday, January 16", user_prompt)  # Formatted date
-        self.assertIn("02:00 PM to 05:00 PM", user_prompt)  # Formatted time
+        self.assertIn("02:00 PM", user_prompt)  # Formatted time
+        self.assertIn("05:00 PM", user_prompt)  # End time
         self.assertIn("https://needham.gov/kids-festival", user_prompt)
-        
+
         # Verify the prompt structure includes the event listing
-        self.assertIn("Available upcoming events:", user_prompt)
-        self.assertIn("1. Needham Kids Festival", user_prompt)
-        
+        self.assertIn("EVENTS YOU CAN RECOMMEND:", user_prompt)
+        self.assertIn("1. **Needham Kids Festival**", user_prompt)
+
         # Verify it doesn't say no events found
-        self.assertNotIn("(No matching upcoming events found in database)", user_prompt)
+        self.assertNotIn("[No events found matching this search]", user_prompt)
 
 
 class PromptFlowDebugTest(TestCase):

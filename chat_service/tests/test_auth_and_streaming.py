@@ -62,65 +62,85 @@ class AuthAndStreamingTests(TestCase):
         response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
         self.assertEqual(response.status_code, 401)
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_streaming_error_handling(self, mock_get_llm, mock_get_events):
+    def test_streaming_error_handling(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test error handling in streaming response."""
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+
         mock_get_events.return_value = []
-        
+
         # Mock LLM service that raises an exception
         mock_service = MagicMock()
         mock_service.DEFAULT_MODEL_A = "test-model"
-        
+
         async def failing_generator(*args, **kwargs):
             yield {"message": {"content": "Start"}, "done": False, "token": "Start"}
             raise Exception("LLM service error")
-        
+
         mock_service.generate_streaming_response = failing_generator
         mock_get_llm.return_value = mock_service
-        
+
         headers = {"Authorization": f"Bearer {self.jwt}"}
         payload = {"message": "test", "single_model_mode": True}
-        
+
         chunks = []
         with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
                     chunks.append(line[len("data: "):])
-        
+
         # Should have error chunk and system completion
         self.assertGreater(len(chunks), 0)
         # Check that we get some error handling
         error_found = any('error' in chunk or 'LLM service error' in chunk for chunk in chunks)
         self.assertTrue(error_found or len(chunks) > 1, "Should handle streaming errors gracefully")
 
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
     @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
     @patch("chat_service.app.get_llm_service")
-    def test_empty_rag_results(self, mock_get_llm, mock_get_events):
+    def test_empty_rag_results(self, mock_get_llm, mock_get_events, mock_history, mock_save, mock_session):
         """Test handling when RAG returns no events."""
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+
         mock_get_events.return_value = []  # No events found
-        
+
         mock_service = MagicMock()
         mock_service.DEFAULT_MODEL_A = "test-model"
-        
+
         async def mock_generator(*args, **kwargs):
             yield {"message": {"content": "No events"}, "done": False, "token": "No events"}
             yield {"message": {"content": ""}, "done": True, "success": True, "response_time_ms": 100}
-        
+
         mock_service.generate_streaming_response = mock_generator
         mock_get_llm.return_value = mock_service
-        
+
         headers = {"Authorization": f"Bearer {self.jwt}"}
         payload = {"message": "events in mars", "single_model_mode": True}
-        
+
         chunks = []
         with self.client.stream("POST", "/api/v1/chat/stream", json=payload, headers=headers) as resp:
             self.assertEqual(resp.status_code, 200)
             for line in resp.iter_lines():
                 if line and line.startswith("data: "):
                     chunks.append(line[len("data: "):])
-        
+
         self.assertGreater(len(chunks), 0)
         # Should complete successfully even with no events
         system_completion = any('"model": "SYSTEM"' in chunk for chunk in chunks)
@@ -157,54 +177,73 @@ class AuthAndStreamingTests(TestCase):
         refresh = RefreshToken.for_user(self.user)
         token = str(refresh.access_token)
         self.user.delete()  # User no longer exists
-        
+
         headers = {"Authorization": f"Bearer {token}"}
         payload = {"message": "test", "single_model_mode": True}
-        
+
         # Should still work (logs warning but doesn't fail)
-        with patch("chat_service.app.get_relevant_events", new_callable=AsyncMock) as mock_events:
-            with patch("chat_service.app.get_llm_service") as mock_llm:
-                mock_events.return_value = []
-                
-                mock_service = MagicMock()
-                mock_service.DEFAULT_MODEL_A = "test-model"
-                
-                async def mock_gen(*args, **kwargs):
-                    yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
-                
-                mock_service.generate_streaming_response = mock_gen
-                mock_llm.return_value = mock_service
-                
-                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
-                self.assertEqual(response.status_code, 200)
+        with patch("chat_service.app.get_or_create_session", new_callable=AsyncMock) as mock_session:
+            with patch("chat_service.app.save_message", new_callable=AsyncMock) as mock_save:
+                with patch("chat_service.app.get_conversation_history", new_callable=AsyncMock) as mock_history:
+                    with patch("chat_service.app.get_relevant_events", new_callable=AsyncMock) as mock_events:
+                        with patch("chat_service.app.get_llm_service") as mock_llm:
+                            # Mock session management
+                            mock_session_obj = MagicMock()
+                            mock_session_obj.id = 1
+                            mock_session.return_value = mock_session_obj
+                            mock_history.return_value = []
+                            mock_save.return_value = MagicMock()
+                            mock_events.return_value = []
+
+                            mock_service = MagicMock()
+                            mock_service.DEFAULT_MODEL_A = "test-model"
+
+                            async def mock_gen(*args, **kwargs):
+                                yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
+
+                            mock_service.generate_streaming_response = mock_gen
+                            mock_llm.return_value = mock_service
+
+                            response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
+                            self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_AUDIENCE='expected-audience')
-    def test_jwt_audience_validation_success(self):
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
+    @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
+    @patch("chat_service.app.get_llm_service")
+    def test_jwt_audience_validation_success(self, mock_llm, mock_events, mock_history, mock_save, mock_session):
         """Test JWT audience validation when token has correct audience."""
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+        mock_events.return_value = []
+
         from rest_framework_simplejwt.tokens import RefreshToken
-        
+
         # Create token with correct audience
         refresh = RefreshToken.for_user(self.user)
         access_token = refresh.access_token
         access_token.payload['aud'] = 'expected-audience'
-        
+
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        
-        with patch("chat_service.app.get_relevant_events", new_callable=AsyncMock) as mock_events:
-            with patch("chat_service.app.get_llm_service") as mock_llm:
-                mock_events.return_value = []
-                mock_service = MagicMock()
-                mock_service.DEFAULT_MODEL_A = "test-model"
-                
-                async def mock_gen(*args, **kwargs):
-                    yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
-                
-                mock_service.generate_streaming_response = mock_gen
-                mock_llm.return_value = mock_service
-                
-                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
-                self.assertEqual(response.status_code, 200)
+
+        mock_service = MagicMock()
+        mock_service.DEFAULT_MODEL_A = "test-model"
+
+        async def mock_gen(*args, **kwargs):
+            yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
+
+        mock_service.generate_streaming_response = mock_gen
+        mock_llm.return_value = mock_service
+
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_AUDIENCE='expected-audience')
     def test_jwt_audience_validation_failure(self):
@@ -240,60 +279,80 @@ class AuthAndStreamingTests(TestCase):
         self.assertIn("Invalid token audience", response.json()["detail"])
 
     @override_settings(JWT_EXPECTED_AUDIENCE='expected-audience')
-    def test_jwt_audience_validation_list_success(self):
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
+    @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
+    @patch("chat_service.app.get_llm_service")
+    def test_jwt_audience_validation_list_success(self, mock_llm, mock_events, mock_history, mock_save, mock_session):
         """Test JWT audience validation when token has audience as list."""
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+        mock_events.return_value = []
+
         from rest_framework_simplejwt.tokens import RefreshToken
-        
+
         # Create token with audience as list containing correct value
         refresh = RefreshToken.for_user(self.user)
         access_token = refresh.access_token
         access_token.payload['aud'] = ['other-audience', 'expected-audience']
-        
+
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        
-        with patch("chat_service.app.get_relevant_events", new_callable=AsyncMock) as mock_events:
-            with patch("chat_service.app.get_llm_service") as mock_llm:
-                mock_events.return_value = []
-                mock_service = MagicMock()
-                mock_service.DEFAULT_MODEL_A = "test-model"
-                
-                async def mock_gen(*args, **kwargs):
-                    yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
-                
-                mock_service.generate_streaming_response = mock_gen
-                mock_llm.return_value = mock_service
-                
-                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
-                self.assertEqual(response.status_code, 200)
+
+        mock_service = MagicMock()
+        mock_service.DEFAULT_MODEL_A = "test-model"
+
+        async def mock_gen(*args, **kwargs):
+            yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
+
+        mock_service.generate_streaming_response = mock_gen
+        mock_llm.return_value = mock_service
+
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_ISSUER='expected-issuer')
-    def test_jwt_issuer_validation_success(self):
+    @patch("chat_service.app.get_or_create_session", new_callable=AsyncMock)
+    @patch("chat_service.app.save_message", new_callable=AsyncMock)
+    @patch("chat_service.app.get_conversation_history", new_callable=AsyncMock)
+    @patch("chat_service.app.get_relevant_events", new_callable=AsyncMock)
+    @patch("chat_service.app.get_llm_service")
+    def test_jwt_issuer_validation_success(self, mock_llm, mock_events, mock_history, mock_save, mock_session):
         """Test JWT issuer validation when token has correct issuer."""
+        # Mock session management
+        mock_session_obj = MagicMock()
+        mock_session_obj.id = 1
+        mock_session.return_value = mock_session_obj
+        mock_history.return_value = []
+        mock_save.return_value = MagicMock()
+        mock_events.return_value = []
+
         from rest_framework_simplejwt.tokens import RefreshToken
-        
+
         # Create token with correct issuer
         refresh = RefreshToken.for_user(self.user)
         access_token = refresh.access_token
         access_token.payload['iss'] = 'expected-issuer'
-        
+
         headers = {"Authorization": f"Bearer {str(access_token)}"}
         payload = {"message": "test", "single_model_mode": True}
-        
-        with patch("chat_service.app.get_relevant_events", new_callable=AsyncMock) as mock_events:
-            with patch("chat_service.app.get_llm_service") as mock_llm:
-                mock_events.return_value = []
-                mock_service = MagicMock()
-                mock_service.DEFAULT_MODEL_A = "test-model"
-                
-                async def mock_gen(*args, **kwargs):
-                    yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
-                
-                mock_service.generate_streaming_response = mock_gen
-                mock_llm.return_value = mock_service
-                
-                response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
-                self.assertEqual(response.status_code, 200)
+
+        mock_service = MagicMock()
+        mock_service.DEFAULT_MODEL_A = "test-model"
+
+        async def mock_gen(*args, **kwargs):
+            yield {"message": {"content": "OK"}, "done": True, "success": True, "response_time_ms": 10}
+
+        mock_service.generate_streaming_response = mock_gen
+        mock_llm.return_value = mock_service
+
+        response = self.client.post("/api/v1/chat/stream", json=payload, headers=headers)
+        self.assertEqual(response.status_code, 200)
 
     @override_settings(JWT_EXPECTED_ISSUER='expected-issuer')
     def test_jwt_issuer_validation_failure(self):
