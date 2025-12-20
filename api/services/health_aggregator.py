@@ -22,8 +22,6 @@ class HealthAggregator:
     """Aggregate health checks from all services."""
 
     def __init__(self):
-        self.collector_url = getattr(settings, 'COLLECTOR_URL', 'http://localhost:8001')
-        self.navigator_url = getattr(settings, 'NAVIGATOR_URL', 'http://localhost:8004')
         self.timeout = 5.0
 
     async def check_database(self) -> Dict[str, Any]:

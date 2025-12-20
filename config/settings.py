@@ -226,10 +226,6 @@ EMAIL_VERIFICATION_TIMEOUT = int(os.environ.get("EMAIL_VERIFICATION_TIMEOUT", 86
 # Cloudflare Turnstile configuration (bot protection)
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
-# Service URLs for health checks
-COLLECTOR_URL = os.environ.get("COLLECTOR_URL", "http://localhost:8001")
-NAVIGATOR_URL = os.environ.get("NAVIGATOR_URL", "http://localhost:8004")
-
 # LLM Configuration
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")  # 'ollama' or 'bedrock'
 
