@@ -29,7 +29,7 @@ class Source(models.Model):
     )
     
     name = models.CharField(max_length=100, blank=True, null=True)
-    base_url = models.URLField(blank=True)
+    base_url = models.URLField(max_length=200, blank=True)
     site_strategy = models.ForeignKey(
         'SiteStrategy',
         on_delete=models.SET_NULL,
