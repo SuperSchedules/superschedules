@@ -1,13 +1,23 @@
 {% extends "admin/index.html" %}
 
 {% block content %}
-<div style="background: #417690; color: white; padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
-    <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem;">🏥 System Health</h3>
-    <p style="margin: 0 0 0.5rem 0; opacity: 0.9;">Monitor the health of all Superschedules services</p>
-    <a href="/api/health/dashboard"
-       style="display: inline-block; background: white; color: #417690; padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; font-weight: 600;">
-        View Health Dashboard →
-    </a>
+<div style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+    <div style="flex: 1; background: #417690; color: white; padding: 1rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem;">System Health</h3>
+        <p style="margin: 0 0 0.5rem 0; opacity: 0.9;">Monitor all Superschedules services</p>
+        <a href="/api/health/dashboard"
+           style="display: inline-block; background: white; color: #417690; padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; font-weight: 600;">
+            Health Dashboard
+        </a>
+    </div>
+    <div style="flex: 1; background: #28a745; color: white; padding: 1rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem;">RAG Tester</h3>
+        <p style="margin: 0 0 0.5rem 0; opacity: 0.9;">Debug semantic search queries</p>
+        <a href="{% url 'admin_rag_tester' %}"
+           style="display: inline-block; background: white; color: #28a745; padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; font-weight: 600;">
+            Test RAG Queries
+        </a>
+    </div>
 </div>
 
 {{ block.super }}

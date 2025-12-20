@@ -6,7 +6,7 @@ from api.health import router as health_router
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 # Import custom admin configuration to add build info to header
-import config.admin  # noqa: F401 - imported for side effects
+from config.admin import rag_tester_view
 
 # Instantiate the API without a global authentication requirement.
 # Individual routes will specify authentication as needed, allowing
@@ -19,6 +19,7 @@ api.add_router("", health_router)
 
 urlpatterns = [
     path("grappelli/", include("grappelli.urls")),
+    path("admin/rag-tester/", rag_tester_view, name="admin_rag_tester"),
     path("admin/", admin.site.urls),
     path("api/v1/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/v1/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),

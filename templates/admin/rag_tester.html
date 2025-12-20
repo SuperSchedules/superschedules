@@ -1,0 +1,138 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}RAG Tester{% endblock %}
+
+{% block branding %}
+<h1 id="site-name"><a href="{% url 'admin:index' %}">RAG Query Tester</a></h1>
+{% endblock %}
+
+{% block content %}
+<style>
+    .rag-tester { max-width: 1200px; margin: 0 auto; }
+    .query-form { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .query-form label { display: block; margin-bottom: 5px; font-weight: bold; }
+    .query-form input[type="text"], .query-form select { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; }
+    .query-form input[type="submit"] { background: #417690; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+    .query-form input[type="submit"]:hover { background: #205067; }
+    .inline-fields { display: flex; gap: 15px; }
+    .inline-fields > div { flex: 1; }
+    .results-section { margin-top: 20px; }
+    .result-card { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+    .result-card h3 { margin: 0 0 10px 0; color: #417690; }
+    .result-card .score { background: #28a745; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; float: right; }
+    .result-card .meta { color: #666; font-size: 0.9em; margin-bottom: 10px; }
+    .result-card .description { color: #333; }
+    .embedding-text { background: #f1f1f1; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 0.85em; white-space: pre-wrap; word-break: break-word; margin-top: 10px; max-height: 150px; overflow-y: auto; }
+    .debug-section { background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .debug-section h3 { margin-top: 0; }
+    .debug-section pre { background: #f8f9fa; padding: 10px; overflow-x: auto; font-size: 0.85em; }
+    .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+    .stat-box { background: #e9ecef; padding: 15px; border-radius: 8px; text-align: center; flex: 1; }
+    .stat-box .number { font-size: 2em; font-weight: bold; color: #417690; }
+    .stat-box .label { color: #666; }
+    .no-results { text-align: center; padding: 40px; color: #666; }
+</style>
+
+<div class="rag-tester">
+    <h2>Test RAG Semantic Search</h2>
+    <p>Enter a query to see how the RAG system retrieves relevant events for LLM context.</p>
+
+    <form method="post" class="query-form">
+        {% csrf_token %}
+        <label for="query">Query:</label>
+        <input type="text" id="query" name="query" value="{{ query|default:'' }}" placeholder="e.g., activities for kids in Newton this weekend" required>
+
+        <div class="inline-fields">
+            <div>
+                <label for="limit">Max Results:</label>
+                <select id="limit" name="limit">
+                    <option value="5" {% if limit == 5 %}selected{% endif %}>5</option>
+                    <option value="10" {% if limit == 10 %}selected{% endif %}>10</option>
+                    <option value="20" {% if limit == 20 %}selected{% endif %}>20</option>
+                </select>
+            </div>
+            <div>
+                <label for="threshold">Min Similarity:</label>
+                <select id="threshold" name="threshold">
+                    <option value="0.1" {% if threshold == 0.1 %}selected{% endif %}>0.1 (Very Low)</option>
+                    <option value="0.2" {% if threshold == 0.2 %}selected{% endif %}>0.2 (Low)</option>
+                    <option value="0.3" {% if threshold == 0.3 %}selected{% endif %}>0.3 (Default)</option>
+                    <option value="0.4" {% if threshold == 0.4 %}selected{% endif %}>0.4 (Medium)</option>
+                    <option value="0.5" {% if threshold == 0.5 %}selected{% endif %}>0.5 (High)</option>
+                </select>
+            </div>
+            <div>
+                <label for="time_filter">Time Range:</label>
+                <select id="time_filter" name="time_filter">
+                    <option value="7" {% if time_filter == 7 %}selected{% endif %}>Next 7 days</option>
+                    <option value="14" {% if time_filter == 14 %}selected{% endif %}>Next 14 days</option>
+                    <option value="30" {% if time_filter == 30 %}selected{% endif %}>Next 30 days</option>
+                    <option value="90" {% if time_filter == 90 %}selected{% endif %}>Next 90 days</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="inline-fields">
+            <div>
+                <label for="location">Location Filter (optional):</label>
+                <input type="text" id="location" name="location" value="{{ location|default:'' }}" placeholder="e.g., Newton, Boston">
+            </div>
+        </div>
+
+        <input type="submit" value="Run RAG Search">
+    </form>
+
+    {% if query %}
+    <div class="debug-section">
+        <h3>Debug Info</h3>
+        <p><strong>Query:</strong> {{ query }}</p>
+        <p><strong>Location extracted:</strong> {{ location_extracted|default:"None" }}</p>
+        <p><strong>Search time:</strong> {{ search_time_ms|floatformat:1 }} ms</p>
+        {% if embedding_text %}
+        <p><strong>Sample embedding text (first result):</strong></p>
+        <div class="embedding-text">{{ embedding_text }}</div>
+        {% endif %}
+    </div>
+
+    <div class="stats">
+        <div class="stat-box">
+            <div class="number">{{ results|length }}</div>
+            <div class="label">Events Found</div>
+        </div>
+        <div class="stat-box">
+            <div class="number">{{ total_events }}</div>
+            <div class="label">Total Events (with embeddings)</div>
+        </div>
+        <div class="stat-box">
+            <div class="number">{% if results %}{{ results.0.similarity_score|floatformat:3 }}{% else %}-{% endif %}</div>
+            <div class="label">Top Score</div>
+        </div>
+    </div>
+
+    <div class="results-section">
+        <h3>Results</h3>
+        {% if results %}
+            {% for event in results %}
+            <div class="result-card">
+                <span class="score">{{ event.similarity_score|floatformat:3 }}</span>
+                <h3><a href="{% url 'admin:events_event_change' event.id %}" target="_blank">{{ event.title }}</a></h3>
+                <div class="meta">
+                    <strong>ID:</strong> {{ event.id }} |
+                    <strong>Location:</strong> {{ event.location|default:"N/A" }} |
+                    <strong>Time:</strong> {{ event.start_time|default:"N/A" }}
+                    {% if event.age_range %} | <strong>Ages:</strong> {{ event.age_range }}{% endif %}
+                </div>
+                <div class="description">{{ event.description|truncatewords:50 }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="no-results">
+                <p>No events found matching your query with the current filters.</p>
+                <p>Try lowering the similarity threshold or expanding the time range.</p>
+            </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

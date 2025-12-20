@@ -6,7 +6,7 @@ from django.utils.html import format_html
 import requests
 import logging
 import json
-from .models import Source, Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch
+from .models import Source, Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch, ChatSession, ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,62 @@ class ScrapingJobAdmin(admin.ModelAdmin):
 @admin.register(ScrapeBatch)
 class ScrapeBatchAdmin(admin.ModelAdmin):
     list_display = ("id", "submitted_by", "created_at")
+
+
+class ChatMessageInline(admin.TabularInline):
+    model = ChatMessage
+    extra = 0
+    readonly_fields = ('role', 'content', 'created_at', 'metadata')
+    fields = ('role', 'content', 'created_at', 'metadata')
+    ordering = ('created_at',)
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ChatSession)
+class ChatSessionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'title', 'message_count', 'is_active', 'created_at', 'updated_at')
+    list_filter = ('is_active', 'created_at', 'user')
+    search_fields = ('title', 'user__username', 'user__email')
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = [ChatMessageInline]
+    ordering = ('-updated_at',)
+
+    def message_count(self, obj):
+        return obj.messages.count()
+    message_count.short_description = 'Messages'
+
+
+@admin.register(ChatMessage)
+class ChatMessageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'session_link', 'role', 'content_preview', 'model_used', 'created_at')
+    list_filter = ('role', 'created_at', 'session__user')
+    search_fields = ('content', 'session__title', 'session__user__username')
+    readonly_fields = ('session', 'role', 'content', 'created_at', 'metadata', 'referenced_events_list')
+    ordering = ('-created_at',)
+
+    def content_preview(self, obj):
+        return obj.content[:80] + '...' if len(obj.content) > 80 else obj.content
+    content_preview.short_description = 'Content'
+
+    def session_link(self, obj):
+        from django.urls import reverse
+        url = reverse('admin:events_chatsession_change', args=[obj.session.id])
+        return format_html('<a href="{}">{}</a>', url, obj.session.title or f'Session {obj.session.id}')
+    session_link.short_description = 'Session'
+
+    def model_used(self, obj):
+        return obj.metadata.get('model', '-')
+    model_used.short_description = 'Model'
+
+    def referenced_events_list(self, obj):
+        events = obj.referenced_events.all()[:10]
+        if not events:
+            return '-'
+        return format_html('<br>'.join([f'{e.id}: {e.title[:50]}' for e in events]))
+    referenced_events_list.short_description = 'Referenced Events'
 
 
 # Unregister the default TaskResult admin and register our custom one
