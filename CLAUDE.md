@@ -2,8 +2,14 @@
 
 AI-powered local events discovery platform. Users ask: *"Activities for 3-5 year olds in Newton, next 3 hours"* and get intelligent recommendations via RAG-powered chat.
 
-## In-Progress Work: Venue System
-**READ FIRST:** See `VENUE_IMPLEMENTATION_HANDOFF.md` for details on the new Venue model and location normalization system. Next step is updating the chat LLM / event API so the frontend uses the new structured venue data.
+## Recent Work: Location Resolution System
+The `locations/` app provides deterministic location resolution for queries like "events near Newton":
+- **Location model**: Canonical US cities/towns with lat/lng from Census Gazetteer
+- **Resolution service**: `resolve_location("Newton, MA")` → coordinates + confidence
+- **Geo-filtering**: Bounding box + Haversine distance filtering
+- **RAG integration**: Automatic location resolution before semantic search
+
+See `VENUE_IMPLEMENTATION_HANDOFF.md` for the Venue model and venue normalization system.
 
 ## Multi-Repository Architecture
 
@@ -46,9 +52,9 @@ This is the **main backend repository** in a 5-repo system:
 ### Data Models
 - **Event**: Title, description, venue FK, room_name, start/end times, vector embedding
 - **Venue**: Structured address (name, street, city, state, zip), geocoding, deduplication
+- **Location**: Canonical US cities/towns with lat/lng, population (from Census Gazetteer)
 - **Source**: Event source URLs with site strategies
 - **SiteStrategy**: Domain-specific scraping patterns and success rates
-- **Place**: (Legacy) Schema.org Place objects - kept for backward compatibility
 - **ScrapingJob**: Async job tracking for collector integration
 
 ## Development Guidelines
@@ -117,26 +123,32 @@ Keep subject lines ≤72 characters. Include rationale in commit body when usefu
 superschedules/
 ├── config/              # Django settings, URLs, WSGI
 ├── events/              # Core Django app
-│   ├── models.py       # Event, Source, SiteStrategy, ScrapingJob, Place
-│   ├── place_models.py # Schema.org Place model
+│   ├── models.py       # Event, Source, SiteStrategy, ScrapingJob
 │   ├── admin.py        # Grappelli admin with collector integration
 │   ├── tests/          # Event model and API tests
-│   └── management/
-│       └── commands/
-│           └── update_embeddings.py  # RAG embedding management
+│   └── management/commands/
+│       └── update_embeddings.py  # RAG embedding management
+├── venues/              # Venue normalization
+│   ├── models.py       # Venue model with structured address
+│   ├── extraction.py   # Venue extraction from collector data
+│   └── geocoding.py    # Nominatim geocoding service
+├── locations/           # Location resolution (NEW)
+│   ├── models.py       # Location model (Census Gazetteer data)
+│   ├── services.py     # resolve_location(), filter_by_distance()
+│   ├── admin.py        # Location admin interface
+│   ├── tests/          # 57 tests for normalization, resolution, geo-filter
+│   └── management/commands/
+│       └── import_locations.py  # Census data import
 ├── api/                 # Service layer
 │   ├── views.py        # Django Ninja API endpoints
 │   ├── llm_service.py  # Ollama/Deepseek integration
-│   ├── rag_service.py  # Semantic search with sentence-transformers
+│   ├── rag_service.py  # Semantic search + location resolution
 │   ├── auth.py         # JWT + service token authentication
-│   ├── health.py       # Health/readiness endpoints
 │   └── tests/          # API, RAG, LLM tests
 ├── chat_service/        # FastAPI streaming chat
 │   ├── app.py          # SSE streaming endpoints with RAG context
-│   ├── debug_routes.py # Task debugging endpoints
 │   └── tests/          # FastAPI integration tests
 ├── scripts/             # Utility scripts
-│   └── start_chat_service.py
 ├── requirements.txt     # Python dependencies
 └── manage.py           # Django management
 ```
@@ -149,7 +161,7 @@ superschedules/
 - Vector embeddings stored in PostgreSQL with pgvector
 - Cosine similarity for event matching
 - Real-time context retrieval for chat responses
-- Location extraction and temporal filtering
+- **Deterministic location resolution** before semantic search
 - Embeddings auto-generated via Django signals on Event save
 
 **Usage:**
@@ -160,14 +172,49 @@ rag = get_rag_service()
 results = rag.search_events("activities for kids in Newton", limit=5)
 ```
 
-### 2. LLM Integration
+### 2. Location Resolution System (NEW)
+**Location:** `locations/services.py`
+- Deterministic city/town → lat/lng resolution (no LLM needed)
+- US Census Gazetteer data (~31K places with coordinates + population)
+- Disambiguation: prefers Greater Boston states (MA, NH, RI, CT, ME, VT)
+- Bounding box + Haversine distance filtering (10-mile default radius)
+
+**Usage:**
+```python
+from locations.services import resolve_location, filter_by_distance
+
+# Resolve "Newton" or "Newton, MA" to coordinates
+result = resolve_location("Newton, MA")
+print(result.matched_location)  # Newton, MA
+print(result.latitude, result.longitude)  # 42.337807, -71.209182
+print(result.confidence)  # 1.0 (exact match)
+print(result.is_ambiguous)  # False
+
+# Filter events by distance
+from events.models import Event
+events = filter_by_distance(Event.objects.all(), lat=42.34, lng=-71.21, radius_miles=10)
+```
+
+**Data Import:**
+```bash
+# Import Census Gazetteer data (production)
+python manage.py import_locations --source=census
+
+# Import specific state only
+python manage.py import_locations --source=census --state=MA
+
+# Dry run to preview
+python manage.py import_locations --dry-run --limit=100
+```
+
+### 3. LLM Integration
 **Location:** `api/llm_service.py`
 - Ollama integration with Deepseek model
 - Streaming responses via FastAPI SSE
 - Context-aware prompts with RAG results
 - Fallback model support (llama3.2:3b)
 
-### 3. Event Collection Pipeline
+### 4. Event Collection Pipeline
 **Flow:** Navigator → Collector → Django API
 1. **Navigator** scans sites to find event pages
 2. **Collector** (port 8001) extracts events:
@@ -179,7 +226,7 @@ results = rag.search_events("activities for kids in Newton", limit=5)
    - Automatic embedding generation
    - Site strategy tracking
 
-### 4. Chat Service (FastAPI)
+### 5. Chat Service (FastAPI)
 **Location:** `chat_service/app.py` (Port 8002)
 - Server-Sent Events (SSE) for streaming
 - JWT authentication (shared with Django)
@@ -234,6 +281,7 @@ source .venv/bin/activate && python manage.py test --settings=config.test_settin
 # Target specific modules
 source .venv/bin/activate && python manage.py test api --settings=config.test_settings --buffer
 source .venv/bin/activate && python manage.py test events --settings=config.test_settings --buffer
+source .venv/bin/activate && python manage.py test locations --settings=config.test_settings --buffer
 
 # View logs during tests (for debugging)
 source .venv/bin/activate && LOG_LEVEL=INFO python manage.py test --settings=config.test_settings

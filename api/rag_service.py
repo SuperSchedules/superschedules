@@ -283,6 +283,7 @@ class EventRAGService:
         max_distance_miles: float = None,
         user_lat: float = None,
         user_lng: float = None,
+        default_state: str = None,
     ) -> List[Dict[str, Any]]:
         """
         Get relevant future events for LLM context based on user message.
@@ -299,31 +300,61 @@ class EventRAGService:
             max_distance_miles: Maximum distance from user location
             user_lat: User's latitude for distance calculation
             user_lng: User's longitude for distance calculation
+            default_state: Default state for location disambiguation (e.g., 'MA')
 
         Returns:
             List of event dictionaries for LLM context
         """
         try:
-            # Use explicit location if provided, otherwise extract from message
+            # Step 1: Determine location query string
             if location:
-                location_filter = location
+                location_query = location
             else:
                 location_hints = self._extract_location_hints(user_message)
-                location_filter = location_hints[0] if location_hints else None
+                location_query = location_hints[0] if location_hints else None
 
-            # Perform semantic search with all filters
+            # Step 2: Try to resolve location to coordinates (if not already provided)
+            resolved_location = None
+            effective_lat = user_lat
+            effective_lng = user_lng
+            location_filter = None  # Text-based fallback
+
+            if location_query and (effective_lat is None or effective_lng is None):
+                try:
+                    from locations.services import resolve_location
+                    result = resolve_location(location_query, default_state=default_state)
+                    if result.matched_location:
+                        resolved_location = result
+                        effective_lat = float(result.latitude)
+                        effective_lng = float(result.longitude)
+                        # Use 10 mile default radius if not specified
+                        if max_distance_miles is None:
+                            max_distance_miles = 10.0
+                        logger.info(
+                            f"Location resolved: '{location_query}' -> {result.display_name} "
+                            f"(lat={effective_lat:.4f}, lng={effective_lng:.4f}, confidence={result.confidence})"
+                        )
+                    else:
+                        # Location not found in database, fall back to text filter
+                        location_filter = location_query
+                        logger.info(f"Location not resolved: '{location_query}', falling back to text filter")
+                except Exception as e:
+                    logger.warning(f"Location resolution failed for '{location_query}': {e}, using text filter")
+                    location_filter = location_query
+
+            # Step 3: Perform semantic search with geo-filter or text filter
             results = self.semantic_search(
                 query=user_message,
                 top_k=max_events * 2,  # Get more results to filter
                 time_filter_days=time_filter_days,
-                location_filter=location_filter,
+                location_filter=location_filter,  # Only used if geo resolution failed
                 only_future_events=True,
                 date_from=date_from,
                 date_to=date_to,
                 is_virtual=is_virtual,
-                max_distance_miles=max_distance_miles,
-                user_lat=user_lat,
-                user_lng=user_lng,
+                max_distance_miles=max_distance_miles if effective_lat else None,
+                user_lat=effective_lat,
+                user_lng=effective_lng,
             )
 
             # Filter by similarity threshold and format for LLM

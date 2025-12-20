@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'django_celery_results',
     'events',
     'venues',
+    'locations',
     'api',
 ]
 

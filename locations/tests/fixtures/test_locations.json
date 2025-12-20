@@ -1,0 +1,152 @@
+[
+  {
+    "model": "locations.location",
+    "pk": 1,
+    "fields": {
+      "geoid": "2545000",
+      "name": "Newton",
+      "normalized_name": "newton",
+      "state": "MA",
+      "country_code": "US",
+      "latitude": "42.337807",
+      "longitude": "-71.209182",
+      "lsad": "city",
+      "population": 88923
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 2,
+    "fields": {
+      "geoid": "2511000",
+      "name": "Cambridge",
+      "normalized_name": "cambridge",
+      "state": "MA",
+      "country_code": "US",
+      "latitude": "42.373611",
+      "longitude": "-71.110558",
+      "lsad": "city",
+      "population": 118403
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 3,
+    "fields": {
+      "geoid": "2549820",
+      "name": "Waltham",
+      "normalized_name": "waltham",
+      "state": "MA",
+      "country_code": "US",
+      "latitude": "42.390710",
+      "longitude": "-71.235500",
+      "lsad": "city",
+      "population": 64015
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 4,
+    "fields": {
+      "geoid": "2507000",
+      "name": "Boston",
+      "normalized_name": "boston",
+      "state": "MA",
+      "country_code": "US",
+      "latitude": "42.360082",
+      "longitude": "-71.058880",
+      "lsad": "city",
+      "population": 675647
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 5,
+    "fields": {
+      "geoid": "2567000",
+      "name": "Springfield",
+      "normalized_name": "springfield",
+      "state": "MA",
+      "country_code": "US",
+      "latitude": "42.101483",
+      "longitude": "-72.589811",
+      "lsad": "city",
+      "population": 155929
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 6,
+    "fields": {
+      "geoid": "1773000",
+      "name": "Springfield",
+      "normalized_name": "springfield",
+      "state": "IL",
+      "country_code": "US",
+      "latitude": "39.801055",
+      "longitude": "-89.643604",
+      "lsad": "city",
+      "population": 114394
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 7,
+    "fields": {
+      "geoid": "2970000",
+      "name": "Springfield",
+      "normalized_name": "springfield",
+      "state": "MO",
+      "country_code": "US",
+      "latitude": "37.208957",
+      "longitude": "-93.292298",
+      "lsad": "city",
+      "population": 169176
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 8,
+    "fields": {
+      "geoid": "4167000",
+      "name": "Springfield",
+      "normalized_name": "springfield",
+      "state": "OR",
+      "country_code": "US",
+      "latitude": "44.046236",
+      "longitude": "-123.021980",
+      "lsad": "city",
+      "population": 62256
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 9,
+    "fields": {
+      "geoid": "3345140",
+      "name": "Manchester",
+      "normalized_name": "manchester",
+      "state": "NH",
+      "country_code": "US",
+      "latitude": "42.991173",
+      "longitude": "-71.463706",
+      "lsad": "city",
+      "population": 115644
+    }
+  },
+  {
+    "model": "locations.location",
+    "pk": 10,
+    "fields": {
+      "geoid": "4459000",
+      "name": "Providence",
+      "normalized_name": "providence",
+      "state": "RI",
+      "country_code": "US",
+      "latitude": "41.823989",
+      "longitude": "-71.412834",
+      "lsad": "city",
+      "population": 190934
+    }
+  }
+]
