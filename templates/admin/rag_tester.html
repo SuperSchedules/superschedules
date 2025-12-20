@@ -78,6 +78,17 @@
                 <label for="location">Location Filter (optional):</label>
                 <input type="text" id="location" name="location" value="{{ location|default:'' }}" placeholder="e.g., Newton, Boston">
             </div>
+            <div>
+                <label for="radius">Search Radius:</label>
+                <select id="radius" name="radius">
+                    <option value="" {% if not radius %}selected{% endif %}>Auto (10 mi default)</option>
+                    <option value="5" {% if radius == '5' %}selected{% endif %}>5 miles</option>
+                    <option value="10" {% if radius == '10' %}selected{% endif %}>10 miles</option>
+                    <option value="15" {% if radius == '15' %}selected{% endif %}>15 miles</option>
+                    <option value="25" {% if radius == '25' %}selected{% endif %}>25 miles</option>
+                    <option value="50" {% if radius == '50' %}selected{% endif %}>50 miles</option>
+                </select>
+            </div>
         </div>
 
         <input type="submit" value="Run RAG Search">
@@ -87,7 +98,21 @@
     <div class="debug-section">
         <h3>Debug Info</h3>
         <p><strong>Query:</strong> {{ query }}</p>
-        <p><strong>Location extracted:</strong> {{ location_extracted|default:"None" }}</p>
+        <p><strong>Location query:</strong> {{ location_extracted|default:"None" }}</p>
+        {% if resolved_location %}
+        <div style="background: #d4edda; padding: 10px; border-radius: 4px; margin: 10px 0;">
+            <strong>Location Resolved:</strong> {{ resolved_location.matched }}<br>
+            <strong>Coordinates:</strong> {{ resolved_location.lat|floatformat:4 }}, {{ resolved_location.lng|floatformat:4 }}<br>
+            <strong>Confidence:</strong> {{ resolved_location.confidence|floatformat:2 }}
+            {% if resolved_location.is_ambiguous %}
+                <span style="color: #856404;">(ambiguous - alternatives: {{ resolved_location.alternatives|join:", " }})</span>
+            {% endif %}
+        </div>
+        {% elif location_extracted %}
+        <div style="background: #fff3cd; padding: 10px; border-radius: 4px; margin: 10px 0;">
+            <strong>Location not resolved:</strong> "{{ location_extracted }}" - using text-based venue filter
+        </div>
+        {% endif %}
         <p><strong>Search time:</strong> {{ search_time_ms|floatformat:1 }} ms</p>
         {% if embedding_text %}
         <p><strong>Sample embedding text (first result):</strong></p>
@@ -107,6 +132,10 @@
         <div class="stat-box">
             <div class="number">{% if results %}{{ results.0.similarity_score|floatformat:3 }}{% else %}-{% endif %}</div>
             <div class="label">Top Score</div>
+        </div>
+        <div class="stat-box">
+            <div class="number">{% if resolved_location.matched %}🎯{% else %}📝{% endif %}</div>
+            <div class="label">{% if resolved_location.matched %}Geo Filter{% else %}Text Filter{% endif %}</div>
         </div>
     </div>
 
