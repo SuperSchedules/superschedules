@@ -150,13 +150,12 @@ class HealthAggregator:
             self.check_database(),
             self.check_llm_provider(),
             self.check_rag_service(),
-            self.check_external_service("collector", self.collector_url),
             self.check_external_service("navigator", self.navigator_url),
             return_exceptions=True
         )
 
         # Map results to service names
-        database, llm, rag, collector, navigator = results
+        database, llm, rag, navigator = results
 
         # Handle exceptions from gather
         def safe_result(result, default_name):
@@ -169,7 +168,6 @@ class HealthAggregator:
             "database": safe_result(database, "database"),
             "llm_provider": safe_result(llm, "llm_provider"),
             "rag_service": safe_result(rag, "rag_service"),
-            "collector": safe_result(collector, "collector"),
             "navigator": safe_result(navigator, "navigator"),
         }
 
