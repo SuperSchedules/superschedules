@@ -83,7 +83,7 @@ def _location_to_result(location: Location) -> LocationResultSchema:
     )
 
 
-@router.get("/suggest", response=SuggestResponseSchema, auth=None)
+@router.get("/suggest/", response=SuggestResponseSchema, auth=None)
 def suggest_locations(
     request,
     q: str = Query(..., description="Search query (min 2 characters)"),
