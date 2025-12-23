@@ -16,13 +16,13 @@ class TurnstileVerificationTests(TestCase):
     def test_registration_succeeds_when_turnstile_disabled(self):
         """Registration should succeed without Turnstile token when TURNSTILE_SECRET_KEY is not set."""
         # Default settings have empty TURNSTILE_SECRET_KEY
-        resp = self.client.post("/api/v1/users/", self.valid_payload, format="json")
+        resp = self.client.post("/api/v1/users", self.valid_payload, format="json")
         self.assertEqual(resp.status_code, 201)
 
     @override_settings(TURNSTILE_SECRET_KEY="test-secret-key")
     def test_registration_fails_without_token_when_turnstile_enabled(self):
         """Registration should fail when Turnstile is enabled but no token provided."""
-        resp = self.client.post("/api/v1/users/", self.valid_payload, format="json")
+        resp = self.client.post("/api/v1/users", self.valid_payload, format="json")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Security verification required", resp.json().get("detail", ""))
 
@@ -35,7 +35,7 @@ class TurnstileVerificationTests(TestCase):
         mock_post.return_value = mock_response
 
         payload = {**self.valid_payload, "turnstileToken": "valid-token"}
-        resp = self.client.post("/api/v1/users/", payload, format="json")
+        resp = self.client.post("/api/v1/users", payload, format="json")
 
         self.assertEqual(resp.status_code, 201)
         mock_post.assert_called_once()
@@ -52,7 +52,7 @@ class TurnstileVerificationTests(TestCase):
         mock_post.return_value = mock_response
 
         payload = {**self.valid_payload, "turnstileToken": "invalid-token"}
-        resp = self.client.post("/api/v1/users/", payload, format="json")
+        resp = self.client.post("/api/v1/users", payload, format="json")
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Security verification failed", resp.json().get("detail", ""))
@@ -64,7 +64,7 @@ class TurnstileVerificationTests(TestCase):
         mock_post.side_effect = Exception("Network error")
 
         payload = {**self.valid_payload, "turnstileToken": "some-token"}
-        resp = self.client.post("/api/v1/users/", payload, format="json")
+        resp = self.client.post("/api/v1/users", payload, format="json")
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Security verification failed", resp.json().get("detail", ""))
@@ -78,7 +78,7 @@ class TurnstileVerificationTests(TestCase):
         mock_post.return_value = mock_response
 
         payload = {**self.valid_payload, "turnstileToken": "test-token"}
-        self.client.post("/api/v1/users/", payload, format="json")
+        self.client.post("/api/v1/users", payload, format="json")
 
         mock_post.assert_called_once()
         call_args = mock_post.call_args

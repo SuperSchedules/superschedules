@@ -752,7 +752,7 @@ async def merge_async_generators(*generators):
 
 
 
-@app.post("/api/v1/chat/")
+@app.post("/api/v1/chat")
 async def chat_message(
     request: ChatRequest,
     jwt_claims: JWTClaims = Depends(verify_jwt_token)
@@ -805,7 +805,7 @@ async def chat_message(
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 
-@app.get("/api/v1/chat/suggestions/")
+@app.get("/api/v1/chat/suggestions")
 async def chat_suggestions(
     jwt_claims: JWTClaims = Depends(verify_jwt_token)
 ):

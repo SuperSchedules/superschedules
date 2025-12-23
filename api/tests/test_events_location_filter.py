@@ -20,7 +20,7 @@ User = get_user_model()
 
 
 class EventLocationFilterTest(TestCase):
-    """Tests for GET /api/v1/events/?location_id=X&radius_miles=Y"""
+    """Tests for GET /api/v1/events?location_id=X&radius_miles=Y"""
 
     @classmethod
     def setUpTestData(cls):
@@ -112,7 +112,7 @@ class EventLocationFilterTest(TestCase):
     def test_location_filter_returns_nearby_events(self):
         """Test location_id filter returns events within default radius (10 miles)."""
         response = self.client.get(
-            f"/api/v1/events/?location_id={self.newton.id}",
+            f"/api/v1/events?location_id={self.newton.id}",
             **self.get_auth_header()
         )
         self.assertEqual(response.status_code, 200)
@@ -131,7 +131,7 @@ class EventLocationFilterTest(TestCase):
         """Test radius_miles parameter adjusts search area."""
         # With 3-mile radius, only Newton event should be returned
         response = self.client.get(
-            f"/api/v1/events/?location_id={self.newton.id}&radius_miles=3",
+            f"/api/v1/events?location_id={self.newton.id}&radius_miles=3",
             **self.get_auth_header()
         )
         self.assertEqual(response.status_code, 200)
@@ -145,7 +145,7 @@ class EventLocationFilterTest(TestCase):
     def test_location_filter_with_large_radius(self):
         """Test large radius includes distant events."""
         response = self.client.get(
-            f"/api/v1/events/?location_id={self.newton.id}&radius_miles=60",
+            f"/api/v1/events?location_id={self.newton.id}&radius_miles=60",
             **self.get_auth_header()
         )
         self.assertEqual(response.status_code, 200)
@@ -159,7 +159,7 @@ class EventLocationFilterTest(TestCase):
     def test_invalid_location_id_returns_all_events(self):
         """Test invalid location_id is silently ignored."""
         response = self.client.get(
-            "/api/v1/events/?location_id=99999",
+            "/api/v1/events?location_id=99999",
             **self.get_auth_header()
         )
         self.assertEqual(response.status_code, 200)
@@ -173,7 +173,7 @@ class EventLocationFilterTest(TestCase):
         next_week = today + timedelta(days=7)
 
         response = self.client.get(
-            f"/api/v1/events/?location_id={self.newton.id}&start={today}&end={next_week}",
+            f"/api/v1/events?location_id={self.newton.id}&start={today}&end={next_week}",
             **self.get_auth_header()
         )
         self.assertEqual(response.status_code, 200)
@@ -185,7 +185,7 @@ class EventLocationFilterTest(TestCase):
 
     def test_no_location_filter_returns_all_events(self):
         """Test without location_id, all events are returned."""
-        response = self.client.get("/api/v1/events/", **self.get_auth_header())
+        response = self.client.get("/api/v1/events", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         events = response.json()
 

@@ -145,6 +145,10 @@ USE_I18N = True
 USE_L10N = True
 USE_TZ = True
 
+# API URL convention: NO trailing slashes
+# This prevents Django's CommonMiddleware from redirecting /api/foo to /api/foo/
+APPEND_SLASH = False
+
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 

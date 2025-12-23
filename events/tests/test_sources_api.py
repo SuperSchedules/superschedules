@@ -17,14 +17,14 @@ class SourceAPITests(TestCase):
 
     def authenticate(self):
         resp = self.client.post(
-            "/api/v1/token/", {"username": self.user.username, "password": self.password}, format="json"
+            "/api/v1/token", {"username": self.user.username, "password": self.password}, format="json"
         )
         self.assertEqual(resp.status_code, 200)
         token = resp.data["access"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
     def test_sources_requires_auth(self):
-        resp = self.client.get("/api/v1/sources/")
+        resp = self.client.get("/api/v1/sources")
         self.assertEqual(resp.status_code, 401)
 
     def test_list_and_create_sources(self):
@@ -33,7 +33,7 @@ class SourceAPITests(TestCase):
         baker.make(Source, user=self.user, name="Mine", base_url="https://example.com")
         baker.make(Source, user=other_user, name="Other", base_url="https://other.com")
 
-        resp = self.client.get("/api/v1/sources/")
+        resp = self.client.get("/api/v1/sources")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(len(data), 1)
@@ -42,7 +42,7 @@ class SourceAPITests(TestCase):
         self.assertIn("last_run_at", data[0])
 
         payload = {"base_url": "https://new.com", "name": "New Source"}
-        resp = self.client.post("/api/v1/sources/", payload, format="json")
+        resp = self.client.post("/api/v1/sources", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         # Source is automatically processed after creation
         self.assertIn(resp.json()["status"], ["processed", "not_run", "in_progress"])
@@ -58,7 +58,7 @@ class SourceAPITests(TestCase):
         self.authenticate()
         SiteStrategy.objects.create(domain="link.com")
         payload = {"base_url": "https://link.com", "name": "Link"}
-        resp = self.client.post("/api/v1/sources/", payload, format="json")
+        resp = self.client.post("/api/v1/sources", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         source = Source.objects.get(id=resp.json()["id"])
         strategy = SiteStrategy.objects.get(domain="link.com")

@@ -19,7 +19,7 @@ class EventAPITests(TestCase):
 
     def authenticate(self):
         resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": self.user.username, "password": self.password},
             format="json",
         )
@@ -28,7 +28,7 @@ class EventAPITests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
 
     def test_events_requires_auth(self):
-        resp = self.client.get("/api/v1/events/")
+        resp = self.client.get("/api/v1/events")
         self.assertEqual(resp.status_code, 401)
 
     def test_event_date_filtering(self):
@@ -42,14 +42,14 @@ class EventAPITests(TestCase):
             Event, source=source, start_time=now + timedelta(days=1)
         )
 
-        resp = self.client.get("/api/v1/events/")
+        resp = self.client.get("/api/v1/events")
         ids = [ev["id"] for ev in resp.json()]
         self.assertIn(future_event.id, ids)
         self.assertNotIn(past_event.id, ids)
 
         start = (now - timedelta(days=2)).date().isoformat()
         end = (now + timedelta(days=2)).date().isoformat()
-        resp = self.client.get("/api/v1/events/", {"start": start, "end": end})
+        resp = self.client.get("/api/v1/events", {"start": start, "end": end})
         ids = [ev["id"] for ev in resp.json()]
         self.assertIn(future_event.id, ids)
         self.assertIn(past_event.id, ids)
@@ -71,7 +71,7 @@ class EventCRUDTests(TestCase):
         user.save()
         client = APIClient()
         resp = client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": user.username, "password": password},
             format="json",
         )
@@ -86,7 +86,7 @@ class EventCRUDTests(TestCase):
             "description": "Desc",
             "start_time": timezone.now().isoformat(),
         }
-        resp = client.post("/api/v1/events/", payload, format="json")
+        resp = client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 401)
 
     def test_invalid_service_token_cannot_create_event(self):
@@ -100,12 +100,12 @@ class EventCRUDTests(TestCase):
         }
 
         # Missing token
-        resp = self.client.post("/api/v1/events/", payload, format="json")
+        resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 401)
 
         # Invalid token
         self.client.credentials(HTTP_AUTHORIZATION="Bearer wrongtoken")
-        resp = self.client.post("/api/v1/events/", payload, format="json")
+        resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 401)
 
     def test_service_token_full_crud(self):
@@ -119,7 +119,7 @@ class EventCRUDTests(TestCase):
             "start_time": timezone.now().isoformat(),
             "metadata_tags": ["tag1", "tag2"],
         }
-        resp = self.client.post("/api/v1/events/", payload, format="json")
+        resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         data = resp.json()
         event_id = data["id"]
@@ -148,13 +148,13 @@ class EventCRUDTests(TestCase):
             "url": "https://example.com/event/1",
             "metadata_tags": ["tag1"],
         }
-        resp = self.client.post("/api/v1/events/", payload, format="json")
+        resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         source = Source.objects.get(base_url="https://example.com")
         self.assertEqual(Event.objects.get(id=resp.json()["id"]).source, source)
 
         payload["external_id"] = "ext2"
-        resp = self.client.post("/api/v1/events/", payload, format="json")
+        resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(
             Source.objects.filter(base_url="https://example.com").count(), 1

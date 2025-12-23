@@ -14,13 +14,13 @@ class AuthTests(TestCase):
         user.save()
 
         client = APIClient()
-        resp = client.post('/api/v1/token/', {'username': user.username, 'password': password}, format='json')
+        resp = client.post('/api/v1/token', {'username': user.username, 'password': password}, format='json')
         assert resp.status_code == 200
         assert 'access' in resp.data
         assert 'refresh' in resp.data
 
         refresh = resp.data['refresh']
-        resp = client.post('/api/v1/token/refresh/', {'refresh': refresh}, format='json')
+        resp = client.post('/api/v1/token/refresh', {'refresh': refresh}, format='json')
         assert resp.status_code == 200
         assert 'access' in resp.data
 

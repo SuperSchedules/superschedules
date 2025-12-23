@@ -15,7 +15,7 @@ class StrategyPutTests(TestCase):
         self.user.save()
         self.client = APIClient()
         resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": self.user.username, "password": self.password},
             format="json",
         )

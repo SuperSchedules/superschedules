@@ -17,7 +17,7 @@ class ScrapingTests(TestCase):
         self.user.save()
         self.client = APIClient()
         resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": self.user.username, "password": self.password},
             format="json",
         )
@@ -81,12 +81,12 @@ class ScrapingTests(TestCase):
 
         # Batch submission
         resp = self.client.post(
-            "/api/v1/scrape/batch/",
+            "/api/v1/scrape/batch",
             {"urls": ["https://example.com/a", "https://example.com/b"]},
             format="json",
         )
         self.assertEqual(resp.status_code, 200)
         batch_id = resp.json()["batch_id"]
-        resp = self.client.get(f"/api/v1/scrape/batch/{batch_id}/")
+        resp = self.client.get(f"/api/v1/scrape/batch/{batch_id}")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 2)

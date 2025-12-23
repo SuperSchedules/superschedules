@@ -23,8 +23,9 @@ urlpatterns = [
     path("grappelli/", include("grappelli.urls")),
     path("admin/rag-tester/", rag_tester_view, name="admin_rag_tester"),
     path("admin/", admin.site.urls),
-    path("api/v1/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("api/v1/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    # JWT token endpoints - no trailing slash (API convention)
+    path("api/v1/token", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/v1/token/refresh", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/", api.urls),
 ]
 

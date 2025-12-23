@@ -289,7 +289,7 @@ def _send_verification_email(user):
         return False
 
 
-@router.post("/users/", auth=None, response={201: UserSchema})
+@router.post("/users", auth=None, response={201: UserSchema})
 def create_user(request, payload: UserCreateSchema):
     # Verify Turnstile token if configured
     if settings.TURNSTILE_SECRET_KEY:
@@ -315,7 +315,7 @@ def create_user(request, payload: UserCreateSchema):
     return 201, user
 
 
-@router.post("/reset/", auth=None)
+@router.post("/reset", auth=None)
 def request_password_reset(request, payload: PasswordResetRequestSchema):
     user = User.objects.filter(email=payload.email).first()
     if user:
@@ -339,7 +339,7 @@ def request_password_reset(request, payload: PasswordResetRequestSchema):
 
 
 @router.post(
-    "/reset/confirm/",
+    "/reset/confirm",
     auth=None,
     response={200: MessageSchema, 400: MessageSchema},
 )
@@ -360,7 +360,7 @@ def confirm_password_reset(request, payload: PasswordResetConfirmSchema):
     return {"message": "Password has been reset."}
 
 
-@router.post("/users/verify/{token}/", auth=None, response={200: MessageSchema, 400: MessageSchema})
+@router.post("/users/verify/{token}", auth=None, response={200: MessageSchema, 400: MessageSchema})
 def verify_email(request, token: str):
     """Verify user's email address using the token from the verification email."""
     try:
@@ -384,7 +384,7 @@ def verify_email(request, token: str):
     return 200, {"message": "Email verified successfully. You can now log in."}
 
 
-@router.post("/users/resend-verification/", auth=None, response={200: MessageSchema})
+@router.post("/users/resend-verification", auth=None, response={200: MessageSchema})
 def resend_verification_email(request, payload: EmailVerificationResendSchema):
     """Resend verification email to user."""
     user = User.objects.filter(email=payload.email, is_active=False).first()
@@ -399,12 +399,12 @@ def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
 
 
-@router.get("/sources/", auth=JWTAuth(), response=List[SourceSchema])
+@router.get("/sources", auth=JWTAuth(), response=List[SourceSchema])
 def list_sources(request):
     return Source.objects.filter(user=request.user)
 
 
-@router.post("/sources/", auth=JWTAuth(), response={201: SourceSchema})
+@router.post("/sources", auth=JWTAuth(), response={201: SourceSchema})
 def create_source(request, payload: SourceCreateSchema):
     parsed = urlparse(payload.base_url)
     domain = parsed.netloc
@@ -426,7 +426,7 @@ def create_source(request, payload: SourceCreateSchema):
 
 
 @router.get(
-    "/events/", auth=[ServiceTokenAuth(), JWTAuth()], response=List[EventSchema]
+    "/events", auth=[ServiceTokenAuth(), JWTAuth()], response=List[EventSchema]
 )
 def list_events(
     request,
@@ -482,7 +482,7 @@ def get_event(request, event_id: int):
     return get_object_or_404(Event, id=event_id)
 
 
-@router.post("/events/", auth=ServiceTokenAuth(), response={201: EventSchema})
+@router.post("/events", auth=ServiceTokenAuth(), response={201: EventSchema})
 def create_event(request, payload: EventCreateSchema):
     if payload.source_id is not None:
         source = get_object_or_404(Source, id=payload.source_id)
@@ -627,6 +627,62 @@ def submit_scrape(request, payload: ScrapeRequestSchema):
     return job
 
 
+# Batch endpoints MUST be defined before /scrape/{job_id} to avoid route conflicts
+@router.post("/scrape/batch", auth=JWTAuth(), response=BatchResponseSchema)
+def submit_batch(request, payload: BatchRequestSchema):
+    """Submit multiple URLs for batch processing."""
+    batch = ScrapeBatch.objects.create(submitted_by=request.user)
+    job_ids: List[int] = []
+
+    for url in payload.urls:
+        parsed = urlparse(url)
+        domain = parsed.netloc
+
+        # Check for existing pending/processing job
+        existing_job = ScrapingJob.objects.filter(
+            url=url,
+            status__in=['pending', 'processing']
+        ).first()
+
+        if existing_job:
+            batch.jobs.add(existing_job)
+            job_ids.append(existing_job.id)
+            continue
+
+        # Create or get source
+        source, _ = Source.objects.get_or_create(
+            base_url=url,
+            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
+        )
+
+        # Create new job with lower priority for batch
+        job = ScrapingJob.objects.create(
+            url=url,
+            domain=domain,
+            status='pending',
+            submitted_by=request.user,
+            source=source,
+            priority=7,  # Lower priority for batch submissions
+            lambda_request_id=str(uuid4()),
+        )
+        batch.jobs.add(job)
+        job_ids.append(job.id)
+
+    logger.info(f"Batch {batch.id}: {len(job_ids)} jobs queued")
+    return {"batch_id": batch.id, "job_ids": job_ids}
+
+
+@router.get(
+    "/scrape/batch/{batch_id}",
+    auth=[ServiceTokenAuth(), JWTAuth()],
+    response=List[ScrapingJobSchema],
+)
+def batch_status(request, batch_id: int):
+    """Get status of all jobs in a batch."""
+    batch = get_object_or_404(ScrapeBatch, id=batch_id)
+    return list(batch.jobs.all())
+
+
 @router.get(
     "/scrape/{job_id}", auth=[ServiceTokenAuth(), JWTAuth()], response=ScrapingJobSchema
 )
@@ -705,60 +761,6 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
     job.completed_at = timezone.now()
     job.save()
     return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
-
-
-@router.post("/scrape/batch/", auth=JWTAuth(), response=BatchResponseSchema)
-def submit_batch(request, payload: BatchRequestSchema):
-    """Submit multiple URLs for batch processing."""
-    batch = ScrapeBatch.objects.create(submitted_by=request.user)
-    job_ids: List[int] = []
-
-    for url in payload.urls:
-        parsed = urlparse(url)
-        domain = parsed.netloc
-
-        # Check for existing pending/processing job
-        existing_job = ScrapingJob.objects.filter(
-            url=url,
-            status__in=['pending', 'processing']
-        ).first()
-
-        if existing_job:
-            batch.jobs.add(existing_job)
-            job_ids.append(existing_job.id)
-            continue
-
-        # Create or get source
-        source, _ = Source.objects.get_or_create(
-            base_url=url,
-            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
-        )
-
-        # Create new job with lower priority for batch
-        job = ScrapingJob.objects.create(
-            url=url,
-            domain=domain,
-            status='pending',
-            submitted_by=request.user,
-            source=source,
-            priority=7,  # Lower priority for batch submissions
-            lambda_request_id=str(uuid4()),
-        )
-        batch.jobs.add(job)
-        job_ids.append(job.id)
-
-    logger.info(f"Batch {batch.id}: {len(job_ids)} jobs queued")
-    return {"batch_id": batch.id, "job_ids": job_ids}
-
-
-@router.get(
-    "/scrape/batch/{batch_id}/",
-    auth=[ServiceTokenAuth(), JWTAuth()],
-    response=List[ScrapingJobSchema],
-)
-def batch_status(request, batch_id: int):
-    batch = get_object_or_404(ScrapeBatch, id=batch_id)
-    return list(batch.jobs.all())
 
 
 # Job Queue Management Endpoints

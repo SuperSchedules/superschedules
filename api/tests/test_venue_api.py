@@ -126,7 +126,7 @@ class EventSchemaVenueTest(TestCase):
         token = AccessToken.for_user(user)
 
         response = self.client.get(
-            "/api/v1/events/",
+            "/api/v1/events",
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
 

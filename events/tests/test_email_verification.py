@@ -20,7 +20,7 @@ class EmailVerificationTests(TestCase):
             "first_name": "New",
             "last_name": "User",
         }
-        resp = self.client.post("/api/v1/users/", payload, format="json")
+        resp = self.client.post("/api/v1/users", payload, format="json")
         self.assertEqual(resp.status_code, 201)
 
         # Check that an email was sent
@@ -45,7 +45,7 @@ class EmailVerificationTests(TestCase):
         token = signing.dumps({"user_id": user.id}, salt="email-verification")
 
         # Verify
-        resp = self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        resp = self.client.post(f"/api/v1/users/verify/{token}", format="json")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Email verified successfully", resp.json()["message"])
 
@@ -65,7 +65,7 @@ class EmailVerificationTests(TestCase):
 
         # Cannot login before verification
         login_resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": "test@example.com", "password": "test-pass-123"},
             format="json",
         )
@@ -73,11 +73,11 @@ class EmailVerificationTests(TestCase):
 
         # Verify email
         token = signing.dumps({"user_id": user.id}, salt="email-verification")
-        self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        self.client.post(f"/api/v1/users/verify/{token}", format="json")
 
         # Now login should work
         login_resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": "test@example.com", "password": "test-pass-123"},
             format="json",
         )
@@ -86,7 +86,7 @@ class EmailVerificationTests(TestCase):
 
     def test_verify_invalid_token_returns_error(self):
         """Invalid token should return 400 error."""
-        resp = self.client.post("/api/v1/users/verify/invalid-token/", format="json")
+        resp = self.client.post("/api/v1/users/verify/invalid-token", format="json")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Invalid verification link", resp.json()["message"])
 
@@ -107,7 +107,7 @@ class EmailVerificationTests(TestCase):
         # Wait for token to expire (1 second timeout)
         time.sleep(2)
 
-        resp = self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        resp = self.client.post(f"/api/v1/users/verify/{token}", format="json")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("expired", resp.json()["message"].lower())
 
@@ -121,7 +121,7 @@ class EmailVerificationTests(TestCase):
         )
 
         token = signing.dumps({"user_id": user.id}, salt="email-verification")
-        resp = self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        resp = self.client.post(f"/api/v1/users/verify/{token}", format="json")
 
         self.assertEqual(resp.status_code, 200)
         self.assertIn("already verified", resp.json()["message"].lower())
@@ -137,7 +137,7 @@ class EmailVerificationTests(TestCase):
         )
 
         resp = self.client.post(
-            "/api/v1/users/resend-verification/",
+            "/api/v1/users/resend-verification",
             {"email": "test@example.com"},
             format="json",
         )
@@ -150,7 +150,7 @@ class EmailVerificationTests(TestCase):
     def test_resend_verification_nonexistent_email(self):
         """Resend for non-existent email should return success (prevent enumeration)."""
         resp = self.client.post(
-            "/api/v1/users/resend-verification/",
+            "/api/v1/users/resend-verification",
             {"email": "nobody@example.com"},
             format="json",
         )
@@ -168,7 +168,7 @@ class EmailVerificationTests(TestCase):
         )
 
         resp = self.client.post(
-            "/api/v1/users/resend-verification/",
+            "/api/v1/users/resend-verification",
             {"email": "test@example.com"},
             format="json",
         )
@@ -189,7 +189,7 @@ class EmailVerificationTests(TestCase):
         # Delete the user
         user.delete()
 
-        resp = self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        resp = self.client.post(f"/api/v1/users/verify/{token}", format="json")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Invalid", resp.json()["message"])
 
@@ -202,7 +202,7 @@ class EmailVerificationTests(TestCase):
             "first_name": "Full",
             "last_name": "Flow",
         }
-        resp = self.client.post("/api/v1/users/", payload, format="json")
+        resp = self.client.post("/api/v1/users", payload, format="json")
         self.assertEqual(resp.status_code, 201)
 
         # 2. Extract token from email
@@ -215,12 +215,12 @@ class EmailVerificationTests(TestCase):
         token = match.group(1)
 
         # 3. Verify email
-        resp = self.client.post(f"/api/v1/users/verify/{token}/", format="json")
+        resp = self.client.post(f"/api/v1/users/verify/{token}", format="json")
         self.assertEqual(resp.status_code, 200)
 
         # 4. Login
         login_resp = self.client.post(
-            "/api/v1/token/",
+            "/api/v1/token",
             {"username": "fullflow@example.com", "password": "secure-password-123"},
             format="json",
         )

@@ -117,20 +117,20 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_requires_q_parameter(self):
         """Test that q parameter is required."""
-        response = self.client.get("/api/v1/locations/suggest/", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest", **self.get_auth_header())
         # Django Ninja returns 422 for missing required parameters
         self.assertEqual(response.status_code, 422)
 
     def test_suggest_q_too_short_returns_400(self):
         """Test that q with less than 2 characters returns 400."""
-        response = self.client.get("/api/v1/locations/suggest/?q=N", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=N", **self.get_auth_header())
         self.assertEqual(response.status_code, 400)
         data = response.json()
         self.assertIn("at least 2 characters", data.get("detail", "").lower())
 
     def test_suggest_returns_results_array(self):
         """Test that valid query returns results array."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("results", data)
@@ -138,7 +138,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_result_shape(self):
         """Test that each result has required fields."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreater(len(data["results"]), 0)
@@ -154,7 +154,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_label_format(self):
         """Test label format is 'City, State, Country'."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Cambridge", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Cambridge", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreater(len(data["results"]), 0)
@@ -168,7 +168,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_prefix_matching(self):
         """Test prefix matching returns all Newton* locations."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newt", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newt", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -178,7 +178,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_case_insensitive(self):
         """Test search is case insensitive."""
-        response = self.client.get("/api/v1/locations/suggest/?q=NEWTON", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=NEWTON", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreater(len(data["results"]), 0)
@@ -186,7 +186,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_normalized_matching(self):
         """Test search handles punctuation and whitespace."""
-        response = self.client.get("/api/v1/locations/suggest/?q=new%20ton", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=new%20ton", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         # Normalized as "new ton" - may not match; this tests input handling
 
@@ -196,7 +196,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_exact_match_first(self):
         """Test exact name matches rank before prefix matches."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -207,7 +207,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_ranks_by_population(self):
         """Test results ranked by population (highest first)."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -219,7 +219,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_ambiguous_name_returns_multiple(self):
         """Test ambiguous names like 'Springfield' return multiple results."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Springfield", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Springfield", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -230,7 +230,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_springfield_population_order(self):
         """Test Springfield results ordered by population."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Springfield", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Springfield", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -245,7 +245,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_admin1_filter(self):
         """Test admin1 parameter filters by state."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Springfield&admin1=MA", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Springfield&admin1=MA", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -254,7 +254,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_admin1_case_insensitive(self):
         """Test admin1 filter is case insensitive."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton&admin1=ma", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton&admin1=ma", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -263,7 +263,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_comma_pattern_extracts_state(self):
         """Test 'Cambridge, MA' extracts state hint."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Cambridge,%20MA", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Cambridge,%20MA", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -273,7 +273,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_comma_pattern_with_newton(self):
         """Test 'Newton, NJ' returns only NJ result."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton,%20NJ", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton,%20NJ", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
@@ -287,21 +287,21 @@ class LocationSuggestAPITest(TestCase):
     def test_suggest_default_limit_is_10(self):
         """Test default limit is 10."""
         # Would need more test data to verify, but verify parameter works
-        response = self.client.get("/api/v1/locations/suggest/?q=Sp", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Sp", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertLessEqual(len(data["results"]), 10)
 
     def test_suggest_limit_parameter(self):
         """Test limit parameter constrains results."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Springfield&limit=2", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Springfield&limit=2", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(len(data["results"]), 2)
 
     def test_suggest_limit_max_is_20(self):
         """Test limit parameter caps at 20."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Springfield&limit=100", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Springfield&limit=100", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertLessEqual(len(data["results"]), 20)
@@ -312,7 +312,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_country_filter(self):
         """Test country parameter filters results."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton&country=US", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Newton&country=US", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         for result in data["results"]:
@@ -324,7 +324,7 @@ class LocationSuggestAPITest(TestCase):
 
     def test_suggest_no_match_returns_empty_list(self):
         """Test unmatched query returns empty results."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Zzyzzyzzz", **self.get_auth_header())
+        response = self.client.get("/api/v1/locations/suggest?q=Zzyzzyzzz", **self.get_auth_header())
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["results"], [])
@@ -390,7 +390,7 @@ class LocationSuggestNoAuthTest(TestCase):
 
     def test_suggest_works_without_auth(self):
         """Test suggest endpoint is publicly accessible."""
-        response = self.client.get("/api/v1/locations/suggest/?q=Newton")
+        response = self.client.get("/api/v1/locations/suggest?q=Newton")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreater(len(data["results"]), 0)

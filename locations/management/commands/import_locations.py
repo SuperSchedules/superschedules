@@ -283,7 +283,7 @@ class Command(BaseCommand):
         """Download Census population estimates CSV."""
         request = Request(CENSUS_POPULATION_URL, headers={'User-Agent': 'superschedules-import/1.0'})
         with urlopen(request, timeout=60) as response:
-            return response.read().decode('utf-8')
+            return response.read().decode('latin-1')
 
     def _read_local_file(self, file_path: str) -> str:
         """Read from local file (zip or txt)."""
