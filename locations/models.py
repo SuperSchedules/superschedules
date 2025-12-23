@@ -78,7 +78,8 @@ class Location(models.Model):
             models.Index(fields=['normalized_name', '-population']),
         ]
         constraints = [
-            models.UniqueConstraint(fields=['normalized_name', 'state', 'country_code'], name='unique_location_by_state')
+            # Include lsad to allow both "Springfield city" and "Springfield township" in same state
+            models.UniqueConstraint(fields=['normalized_name', 'state', 'country_code', 'lsad'], name='unique_location_by_state_lsad')
         ]
 
     def __str__(self) -> str:
