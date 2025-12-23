@@ -77,10 +77,7 @@ class Location(models.Model):
             models.Index(fields=['country_code', 'state', 'normalized_name']),
             models.Index(fields=['normalized_name', '-population']),
         ]
-        constraints = [
-            # Include lsad to allow both "Springfield city" and "Springfield township" in same state
-            models.UniqueConstraint(fields=['normalized_name', 'state', 'country_code', 'lsad'], name='unique_location_by_state_lsad')
-        ]
+        # GEOID (Census identifier) is already unique - no additional constraints needed
 
     def __str__(self) -> str:
         return f"{self.name}, {self.state}"
