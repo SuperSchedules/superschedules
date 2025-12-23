@@ -125,7 +125,13 @@ class Command(BaseCommand):
         skipped = 0
         errors = 0
 
-        reader = csv.DictReader(io.StringIO(gazetteer_content), delimiter='\t')
+        # Strip whitespace from header names (Census files have trailing spaces)
+        lines = gazetteer_content.split('\n')
+        if lines:
+            lines[0] = '\t'.join(field.strip() for field in lines[0].split('\t'))
+        cleaned_content = '\n'.join(lines)
+
+        reader = csv.DictReader(io.StringIO(cleaned_content), delimiter='\t')
 
         locations_to_create = []
         locations_to_update = []

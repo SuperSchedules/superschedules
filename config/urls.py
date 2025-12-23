@@ -3,6 +3,7 @@ from django.urls import path, include
 from ninja import NinjaAPI
 from api.views import router as api_router
 from api.health import router as health_router
+from locations.views import router as locations_router
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
 # Import custom admin configuration to add build info to header
@@ -14,6 +15,7 @@ from config.admin import rag_tester_view
 # credentials.
 api = NinjaAPI()
 api.add_router("/v1/", api_router)
+api.add_router("/v1/locations", locations_router, tags=["locations"])
 api.add_router("", health_router)
 
 

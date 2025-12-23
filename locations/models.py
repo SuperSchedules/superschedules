@@ -73,6 +73,9 @@ class Location(models.Model):
             models.Index(fields=['normalized_name', 'state']),
             models.Index(fields=['normalized_name', 'country_code']),
             models.Index(fields=['state', 'name']),
+            # Index for suggest query: prefix match on normalized_name, sort by population desc
+            models.Index(fields=['country_code', 'state', 'normalized_name']),
+            models.Index(fields=['normalized_name', '-population']),
         ]
         constraints = [
             models.UniqueConstraint(fields=['normalized_name', 'state', 'country_code'], name='unique_location_by_state')

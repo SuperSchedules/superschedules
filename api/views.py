@@ -428,13 +428,36 @@ def create_source(request, payload: SourceCreateSchema):
 @router.get(
     "/events/", auth=[ServiceTokenAuth(), JWTAuth()], response=List[EventSchema]
 )
-def list_events(request, start: date | None = None, end: date | None = None, ids: List[int] = Query(None)):
+def list_events(
+    request,
+    start: date | None = None,
+    end: date | None = None,
+    ids: List[int] = Query(None),
+    location_id: int | None = Query(None, description="Filter by location ID (from /locations/suggest)"),
+    radius_miles: float = Query(10.0, description="Search radius in miles (default 10, used with location_id)"),
+):
+    from locations.models import Location
+    from locations.services import filter_by_distance
+
     qs = Event.objects.all().order_by("start_time")
 
     # If specific IDs are requested, filter by those and ignore date filters
     if ids is not None and len(ids) > 0:
         qs = qs.filter(id__in=ids)
         return qs
+
+    # Apply location-based filtering if location_id provided
+    if location_id is not None:
+        try:
+            location = Location.objects.get(id=location_id)
+            qs = filter_by_distance(
+                qs,
+                lat=float(location.latitude),
+                lng=float(location.longitude),
+                radius_miles=radius_miles,
+            )
+        except Location.DoesNotExist:
+            pass  # Invalid location_id, ignore silently
 
     if start or end:
         if start:
