@@ -15,6 +15,7 @@ def normalize_for_matching(name: str) -> str:
 
     - Lowercase
     - Remove "city of", "town of", etc. prefixes
+    - Remove " city", " town", " CDP", etc. suffixes (Census naming convention)
     - Remove punctuation except hyphens
     - Collapse whitespace
     """
@@ -25,6 +26,9 @@ def normalize_for_matching(name: str) -> str:
 
     # Remove "city of", "town of", etc. prefixes
     result = re.sub(r'^(city|town|village|borough|township)\s+of\s+', '', result)
+
+    # Remove Census suffixes: " city", " town", " village", " CDP", " borough", " township"
+    result = re.sub(r'\s+(city|town|village|cdp|borough|township|municipality)$', '', result)
 
     # Remove punctuation except hyphens (for compound names like "Winston-Salem")
     result = re.sub(r'[^\w\s-]', '', result)
