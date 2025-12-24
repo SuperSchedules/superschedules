@@ -313,3 +313,49 @@ def generate_daily_stats():
 
     logger.info(f"Daily stats: {stats}")
     return stats
+
+
+@shared_task
+def renormalize_locations():
+    """
+    Re-normalize all location names to strip Census suffixes.
+
+    Run this after updating the normalize_for_matching() function to apply
+    the new normalization to all existing locations.
+
+    Can be triggered from Django admin or command line:
+        from events.tasks import renormalize_locations
+        renormalize_locations.delay()
+    """
+    import re
+    from locations.models import Location
+
+    def normalize_for_matching(name: str) -> str:
+        if not name:
+            return ""
+        result = name.lower().strip()
+        # Remove prefixes
+        result = re.sub(r'^(city|town|village|borough|township)\s+of\s+', '', result)
+        # Remove Census suffixes
+        result = re.sub(r'\s+(city|town|village|cdp|borough|township|municipality)$', '', result)
+        # Remove punctuation except hyphens
+        result = re.sub(r'[^\w\s-]', '', result)
+        # Collapse whitespace
+        result = re.sub(r'\s+', ' ', result)
+        return result.strip()
+
+    locations = Location.objects.all()
+    total = locations.count()
+    updated = 0
+
+    logger.info(f"Renormalizing {total} locations...")
+
+    for loc in locations.iterator():
+        new_normalized = normalize_for_matching(loc.name)
+        if loc.normalized_name != new_normalized:
+            loc.normalized_name = new_normalized
+            loc.save(update_fields=['normalized_name'])
+            updated += 1
+
+    logger.info(f"Renormalized {updated} of {total} locations")
+    return {'total': total, 'updated': updated}
