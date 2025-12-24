@@ -119,12 +119,18 @@ Now respond to the user using only the information provided below."""
             profile_lines.append(f"Interested in: {', '.join(user_preferences['interests'])}")
         if user_preferences.get('accessibility'):
             profile_lines.append(f"Needs: {', '.join(user_preferences['accessibility'])}")
-        if user_preferences.get('budgetRange'):
-            budget_map = {'free': 'free events', 'low': 'low-cost ($1-25)', 'medium': 'medium ($25-75)', 'high': 'flexible budget'}
-            budgets = [budget_map.get(b, b) for b in user_preferences['budgetRange']]
-            profile_lines.append(f"Budget preference: {', '.join(budgets)}")
         if user_preferences.get('preferredTimes') and user_preferences['preferredTimes'] != 'any':
             profile_lines.append(f"Prefers {user_preferences['preferredTimes']} activities")
+
+    # max_price is now at context level, not in preferences
+    max_price = context.get('max_price')
+    if max_price is not None and max_price > 0:
+        if max_price <= 25:
+            profile_lines.append("Budget preference: low-cost events (under $25)")
+        elif max_price <= 75:
+            profile_lines.append(f"Budget preference: up to ${max_price}")
+        else:
+            profile_lines.append("Budget preference: flexible")
 
     if profile_lines:
         user_prompt_parts.append("ABOUT THIS USER:\n" + "\n".join(profile_lines))
