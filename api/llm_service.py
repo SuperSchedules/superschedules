@@ -32,6 +32,14 @@ CORE BEHAVIOR (VERY IMPORTANT)
 - If something is unclear, ask a short follow-up question instead of assuming.
 - If there are no matching events, say so clearly and help the user refine their search.
 
+DATE MATCHING (CRITICAL)
+- Pay attention to TODAY'S DATE shown in the context to interpret relative dates correctly.
+- If the user mentions a date in their message ("tomorrow", "this weekend", "next Friday"), that takes PRIORITY over any date filter.
+- Interpret date phrases relative to today: "tomorrow" = today + 1 day, "this weekend" = upcoming Saturday/Sunday.
+- If the user doesn't mention dates but a DATE FILTER is shown, respect that filter.
+- ONLY recommend events that fall within the applicable date range.
+- If no events match the exact date request, say "I don't see any events for [date]" rather than suggesting other dates.
+
 PERSONALITY & TONE
 - Warm, conversational, and natural — not salesy, robotic, or overly verbose
 - Helpful and optimistic, but honest when options are limited
@@ -145,7 +153,20 @@ Now respond to the user using only the information provided below."""
         user_prompt_parts.append("\nCONVERSATION SO FAR:\n" + "\n".join(history_lines))
 
     # Current context
-    user_prompt_parts.append(f"\nRIGHT NOW: {context.get('current_date', 'unknown')}")
+    user_prompt_parts.append(f"\nTODAY'S DATE: {context.get('current_date', 'unknown')}")
+
+    # Date filter from user's filter settings
+    date_range = context.get('date_range')
+    if date_range:
+        from_date = date_range.get('from', '')
+        to_date = date_range.get('to', '')
+        if from_date and to_date:
+            user_prompt_parts.append(f"DATE FILTER: {from_date} to {to_date}")
+        elif from_date:
+            user_prompt_parts.append(f"DATE FILTER: from {from_date}")
+        elif to_date:
+            user_prompt_parts.append(f"DATE FILTER: until {to_date}")
+
     location = context.get('location')
     if location:
         user_prompt_parts.append(f"LOCATION: {location}")
