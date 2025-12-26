@@ -6,7 +6,7 @@ Uses sentence transformers for embeddings and cosine similarity for retrieval.
 import json
 import logging
 import html
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -17,6 +17,9 @@ from django.db.models import Q
 from pgvector.django import CosineDistance
 
 from events.models import Event
+
+if TYPE_CHECKING:
+    from traces.recorder import TraceRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -273,8 +276,8 @@ class EventRAGService:
     def get_context_events(
         self,
         user_message: str,
-        max_events: int = 10,
-        similarity_threshold: float = 0.3,
+        max_events: int = 20,
+        similarity_threshold: float = 0.2,
         time_filter_days: int = 30,
         date_from: datetime = None,
         date_to: datetime = None,
@@ -284,6 +287,7 @@ class EventRAGService:
         user_lat: float = None,
         user_lng: float = None,
         default_state: str = None,
+        trace: Optional['TraceRecorder'] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get relevant future events for LLM context based on user message.
@@ -301,17 +305,41 @@ class EventRAGService:
             user_lat: User's latitude for distance calculation
             user_lng: User's longitude for distance calculation
             default_state: Default state for location disambiguation (e.g., 'MA')
+            trace: Optional TraceRecorder for debugging
 
         Returns:
             List of event dictionaries for LLM context
         """
+        import time
+        retrieval_start = time.time()
+
         try:
             # Step 1: Determine location query string
+            location_hints = self._extract_location_hints(user_message)
             if location:
                 location_query = location
             else:
-                location_hints = self._extract_location_hints(user_message)
                 location_query = location_hints[0] if location_hints else None
+
+            # Record input event with all filters
+            if trace:
+                trace.event('input', {
+                    'message': user_message,
+                    'location_hints_extracted': location_hints,
+                    'filters': {
+                        'max_events': max_events,
+                        'similarity_threshold': similarity_threshold,
+                        'time_filter_days': time_filter_days,
+                        'date_from': date_from.isoformat() if date_from else None,
+                        'date_to': date_to.isoformat() if date_to else None,
+                        'location': location,
+                        'is_virtual': is_virtual,
+                        'max_distance_miles': max_distance_miles,
+                        'user_lat': user_lat,
+                        'user_lng': user_lng,
+                        'default_state': default_state,
+                    }
+                })
 
             # Step 2: Try to resolve location to coordinates (if not already provided)
             resolved_location = None
@@ -320,9 +348,12 @@ class EventRAGService:
             location_filter = None  # Text-based fallback
 
             if location_query and (effective_lat is None or effective_lng is None):
+                location_resolve_start = time.time()
                 try:
                     from locations.services import resolve_location
                     result = resolve_location(location_query, default_state=default_state)
+                    location_resolve_ms = int((time.time() - location_resolve_start) * 1000)
+
                     if result.matched_location:
                         resolved_location = result
                         effective_lat = float(result.latitude)
@@ -334,15 +365,44 @@ class EventRAGService:
                             f"Location resolved: '{location_query}' -> {result.display_name} "
                             f"(lat={effective_lat:.4f}, lng={effective_lng:.4f}, confidence={result.confidence})"
                         )
+
+                        if trace:
+                            trace.event('location_resolution', {
+                                'query': location_query,
+                                'matched': result.display_name,
+                                'latitude': effective_lat,
+                                'longitude': effective_lng,
+                                'confidence': result.confidence,
+                                'is_ambiguous': result.is_ambiguous,
+                                'alternatives': [str(alt) for alt in result.alternatives] if result.alternatives else [],
+                                'resolution_type': 'geo',
+                            }, latency_ms=location_resolve_ms)
                     else:
                         # Location not found in database, fall back to text filter
                         location_filter = location_query
                         logger.info(f"Location not resolved: '{location_query}', falling back to text filter")
+
+                        if trace:
+                            trace.event('location_resolution', {
+                                'query': location_query,
+                                'matched': None,
+                                'resolution_type': 'text_fallback',
+                                'reason': 'not_found_in_database',
+                            }, latency_ms=location_resolve_ms)
                 except Exception as e:
                     logger.warning(f"Location resolution failed for '{location_query}': {e}, using text filter")
                     location_filter = location_query
 
+                    if trace:
+                        trace.event('location_resolution', {
+                            'query': location_query,
+                            'matched': None,
+                            'resolution_type': 'text_fallback',
+                            'reason': f'error: {str(e)}',
+                        }, latency_ms=int((time.time() - location_resolve_start) * 1000))
+
             # Step 3: Perform semantic search with geo-filter or text filter
+            search_start = time.time()
             results = self.semantic_search(
                 query=user_message,
                 top_k=max_events * 2,  # Get more results to filter
@@ -356,6 +416,7 @@ class EventRAGService:
                 user_lat=effective_lat,
                 user_lng=effective_lng,
             )
+            search_ms = int((time.time() - search_start) * 1000)
 
             # Filter by similarity threshold and format for LLM
             context_events = []
@@ -381,12 +442,48 @@ class EventRAGService:
                         'url': event.url,
                         'similarity_score': float(score),
                     })
-            
+
+            # Record retrieval event with candidates
+            if trace:
+                # Build candidate list with truncated snippets for display
+                candidates_for_trace = []
+                for event, score in results:
+                    event_text = self._create_event_text(event)
+                    candidates_for_trace.append({
+                        'id': event.id,
+                        'title': clean_html_content(event.title),
+                        'venue': event.venue.name if event.venue else None,
+                        'city': event.get_city(),
+                        'similarity_score': float(score),
+                        'start_time': event.start_time.isoformat() if event.start_time else None,
+                        'above_threshold': score >= similarity_threshold,
+                        'context_snippet': event_text[:500] + ('...' if len(event_text) > 500 else ''),
+                    })
+
+                trace.event('retrieval', {
+                    'query_text': user_message,
+                    'total_candidates': len(results),
+                    'above_threshold': len(context_events),
+                    'threshold': similarity_threshold,
+                    'geo_filter_used': effective_lat is not None,
+                    'text_filter_used': location_filter is not None,
+                    'candidates': candidates_for_trace,
+                }, latency_ms=search_ms)
+
             logger.info(f"Returning {len(context_events)} future context events with scores >= {similarity_threshold}")
             return context_events[:max_events]
-            
+
         except Exception as e:
             logger.error(f"Error in get_context_events: {e}")
+
+            if trace:
+                import traceback
+                trace.event('error', {
+                    'stage': 'retrieval',
+                    'message': str(e),
+                    'stack': traceback.format_exc(),
+                })
+
             # Fallback to basic query if RAG fails
             return self._fallback_event_search(user_message, max_events)
     

@@ -1,0 +1,732 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Chat Debug Runner{% endblock %}
+
+{% block branding %}
+<h1 id="site-name"><a href="{% url 'admin:index' %}">Chat Debug Runner</a></h1>
+{% endblock %}
+
+{% block content %}
+<style>
+    .debug-runner { max-width: 1800px; margin: 0 auto; display: flex; gap: 20px; }
+
+    /* Sidebar */
+    .sidebar { width: 300px; flex-shrink: 0; }
+    .sidebar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .sidebar-header h3 { margin: 0; font-size: 16px; }
+    .sidebar-filter { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+    .runs-list { max-height: calc(100vh - 200px); overflow-y: auto; overflow-x: visible; }
+    .run-card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.15s; overflow: visible; }
+    .run-card:hover { border-color: #417690; }
+    .run-card.selected { border-color: #417690; border-width: 2px; background: #e8f4f8; }
+    .run-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .run-status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .run-status-dot.success { background: #28a745; }
+    .run-status-dot.error { background: #dc3545; }
+    .run-status-dot.pending { background: #ffc107; }
+    .run-status-dot.running { background: #17a2b8; }
+    .run-query { font-size: 13px; line-height: 1.4; color: #333; word-break: break-word; flex: 1; }
+    .run-meta { display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-bottom: 8px; }
+    .run-actions { display: flex; gap: 10px; margin-top: 8px; justify-content: flex-start; }
+    .run-actions button { padding: 6px 12px !important; font-size: 12px !important; border: 1px solid #417690 !important; border-radius: 4px !important; cursor: pointer; background: white !important; color: #417690 !important; font-weight: 500; width: auto !important; height: auto !important; min-width: 0 !important; max-width: none !important; box-sizing: border-box !important; white-space: nowrap; overflow: visible !important; text-overflow: clip !important; flex-shrink: 0 !important; margin: 0 !important; position: relative !important; }
+    .run-actions button:hover { background: #e8f4f8 !important; }
+    .run-actions button.load-btn { background: #417690 !important; color: white !important; border-color: #417690 !important; }
+    .run-actions button.load-btn:hover { background: #205067 !important; }
+    .no-runs { color: #666; font-style: italic; padding: 20px; text-align: center; }
+
+    /* Main content */
+    .main-content { flex: 1; min-width: 0; }
+
+    /* Form styling */
+    .query-form { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .query-form label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 13px; }
+    .query-form textarea { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; box-sizing: border-box; }
+    .query-form input[type="text"], .query-form select { width: 100%; padding: 10px 12px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; line-height: 1.4; height: auto; min-height: 42px; box-sizing: border-box; background-color: white; }
+    .query-form input[type="submit"] { background: #417690; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    .query-form input[type="submit"]:hover { background: #205067; }
+    .query-form input[type="submit"]:disabled { background: #ccc; cursor: not-allowed; }
+    .form-row { display: flex; gap: 15px; flex-wrap: wrap; }
+    .form-row > div { flex: 1; min-width: 140px; }
+
+    /* Status bar */
+    .status-bar { display: flex; gap: 15px; align-items: center; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; }
+    .status-badge { padding: 6px 16px; border-radius: 4px; font-weight: bold; font-size: 14px; }
+    .status-pending { background: #6c757d; color: white; }
+    .status-running { background: #17a2b8; color: white; }
+    .status-success { background: #28a745; color: white; }
+    .status-error { background: #dc3545; color: white; }
+    .status-info { color: #666; font-size: 14px; }
+
+    /* Tabs */
+    .tabs { margin-top: 20px; }
+    .tab-buttons { display: flex; gap: 8px; border-bottom: 2px solid #dee2e6; margin-bottom: 0; padding-bottom: 0; }
+    .debug-runner .tab-buttons button.tab-btn { padding: 12px 24px !important; border: none !important; background: #e9ecef !important; cursor: pointer; font-size: 14px !important; font-weight: 500; border-radius: 4px 4px 0 0; color: #495057 !important; margin: 0 !important; line-height: 1.4; width: auto !important; height: auto !important; min-width: 0 !important; max-width: none !important; box-sizing: content-box !important; white-space: nowrap; overflow: visible !important; text-overflow: clip !important; flex-shrink: 0 !important; }
+    .debug-runner .tab-buttons button.tab-btn:hover { background: #dee2e6 !important; }
+    .debug-runner .tab-buttons button.tab-btn.active { background: #417690 !important; color: white !important; }
+    .tab-content { display: none; padding: 20px; background: white; border: 1px solid #dee2e6; border-top: none; border-radius: 0 0 8px 8px; }
+    .tab-content.active { display: block; }
+
+    /* Response panel */
+    .response-box { background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 20px; white-space: pre-wrap; font-size: 14px; line-height: 1.6; max-height: 500px; overflow-y: auto; }
+
+    /* Retrieval table */
+    .retrieval-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .retrieval-table th { background: #417690; color: white; padding: 10px; text-align: left; position: sticky; top: 0; }
+    .retrieval-table td { padding: 10px; border-bottom: 1px solid #dee2e6; vertical-align: top; }
+    .retrieval-table tr:hover { background: #f8f9fa; }
+    .retrieval-table .score { font-weight: bold; }
+    .retrieval-table .score.high { color: #28a745; }
+    .retrieval-table .score.medium { color: #ffc107; }
+    .retrieval-table .score.low { color: #dc3545; }
+    .retrieval-table .snippet { font-size: 12px; color: #666; max-width: 400px; }
+    .retrieval-table .above { background: #d4edda; }
+    .retrieval-table .below { background: #f8d7da; }
+
+    /* Context blocks */
+    .context-block { margin-bottom: 15px; border: 1px solid #dee2e6; border-radius: 4px; }
+    .context-block-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 15px; background: #e9ecef; cursor: pointer; font-weight: 500; }
+    .context-block-header:hover { background: #dee2e6; }
+    .context-block-meta { font-size: 12px; color: #666; }
+    .context-block-content { padding: 15px; background: #f8f9fa; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; display: none; }
+    .context-block.expanded .context-block-content { display: block; }
+    .context-block-header::after { content: '+'; font-size: 18px; color: #666; }
+    .context-block.expanded .context-block-header::after { content: '-'; }
+
+    /* Prompt display */
+    .prompt-box { background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 600px; overflow-y: auto; }
+    .prompt-section { margin-bottom: 20px; }
+    .prompt-label { color: #569cd6; font-weight: bold; margin-bottom: 10px; display: block; }
+
+    /* Diagnostics */
+    .diagnostics-panel { background: #fff3cd; padding: 20px; border-radius: 8px; }
+    .diagnostics-panel h4 { margin-top: 0; color: #856404; }
+    .warning-list { list-style: none; padding: 0; margin: 0; }
+    .warning-list li { padding: 8px 12px; margin-bottom: 5px; border-radius: 4px; }
+    .warning-high { background: #f8d7da; color: #721c24; }
+    .warning-medium { background: #fff3cd; color: #856404; }
+    .warning-low { background: #d1ecf1; color: #0c5460; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; }
+    .stat-box { background: white; padding: 15px; border-radius: 4px; text-align: center; }
+    .stat-box .value { font-size: 24px; font-weight: bold; color: #417690; }
+    .stat-box .label { font-size: 12px; color: #666; }
+
+    /* Hidden class */
+    .hidden { display: none !important; }
+
+    /* Actions */
+    .actions { margin-top: 20px; display: flex; gap: 10px; }
+    .actions a, .actions button { padding: 8px 16px; border-radius: 4px; text-decoration: none; font-size: 14px; cursor: pointer; }
+    .btn-primary { background: #417690; color: white; border: none; }
+    .btn-secondary { background: #6c757d; color: white; border: none; }
+</style>
+
+<div class="debug-runner">
+    <!-- Sidebar: Previous Runs -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h3>Previous Runs</h3>
+            <select id="status-filter" class="sidebar-filter">
+                <option value="">All</option>
+                <option value="success">Success</option>
+                <option value="error">Error</option>
+            </select>
+        </div>
+        <div id="runs-list" class="runs-list">
+            <div class="no-runs">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+    <h2>Chat Debug Runner</h2>
+    <p>Test chat queries and inspect the full pipeline: retrieval, context assembly, prompt, and LLM response</p>
+
+    <!-- Query Form -->
+    <form id="debug-form" class="query-form">
+        {% csrf_token %}
+        <label for="request_text">Query:</label>
+        <textarea id="request_text" name="request_text" rows="3" placeholder="e.g., Activities for 3-5 year olds in Newton this weekend" required></textarea>
+
+        <div class="form-row">
+            <div>
+                <label for="max_events">Max Events:</label>
+                <select id="max_events" name="max_events">
+                    <option value="10">10</option>
+                    <option value="15">15</option>
+                    <option value="20" selected>20</option>
+                    <option value="30">30</option>
+                    <option value="50">50</option>
+                </select>
+            </div>
+            <div>
+                <label for="similarity_threshold">Min Similarity:</label>
+                <select id="similarity_threshold" name="similarity_threshold">
+                    <option value="0.1">0.1 (Very Low)</option>
+                    <option value="0.2" selected>0.2 (Default)</option>
+                    <option value="0.3">0.3 (Medium)</option>
+                    <option value="0.4">0.4 (High)</option>
+                </select>
+            </div>
+            <div>
+                <label for="location">Location:</label>
+                <input type="text" id="location" name="location" placeholder="e.g., Newton, MA">
+            </div>
+            <div>
+                <label for="max_distance_miles">Radius:</label>
+                <select id="max_distance_miles" name="max_distance_miles">
+                    <option value="">Auto (10 mi)</option>
+                    <option value="5">5 miles</option>
+                    <option value="10">10 miles</option>
+                    <option value="25">25 miles</option>
+                </select>
+            </div>
+            <div>
+                <label for="time_filter_days">Time Range:</label>
+                <select id="time_filter_days" name="time_filter_days">
+                    <option value="7">7 days</option>
+                    <option value="14" selected>14 days</option>
+                    <option value="30">30 days</option>
+                </select>
+            </div>
+            <div style="display: flex; align-items: center; min-width: 180px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 0;">
+                    <input type="checkbox" id="use_tools" name="use_tools" checked style="width: 18px; height: 18px;">
+                    <span>Enable LLM Tools</span>
+                </label>
+            </div>
+        </div>
+
+        <input type="submit" value="Run Debug Chat" id="submit-btn">
+    </form>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+        <span id="status-badge" class="status-badge status-pending">Ready</span>
+        <span id="status-info" class="status-info"></span>
+    </div>
+
+    <!-- Results Tabs -->
+    <div id="results-section" class="tabs hidden">
+        <div class="tab-buttons">
+            <button class="tab-btn active" data-tab="response">Response</button>
+            <button class="tab-btn" data-tab="retrieval">Retrieval</button>
+            <button class="tab-btn" data-tab="context">Context Blocks</button>
+            <button class="tab-btn" data-tab="prompt">Final Prompt</button>
+            <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
+        </div>
+
+        <!-- Response Tab -->
+        <div id="tab-response" class="tab-content active">
+            <h3>LLM Response</h3>
+            <div id="response-box" class="response-box">
+                <em style="color:#888;">Waiting for response...</em>
+            </div>
+        </div>
+
+        <!-- Retrieval Tab -->
+        <div id="tab-retrieval" class="tab-content">
+            <h3>RAG Retrieval Results</h3>
+            <div id="retrieval-summary" style="margin-bottom: 15px;"></div>
+            <div style="max-height: 600px; overflow-y: auto;">
+                <table class="retrieval-table">
+                    <thead>
+                        <tr>
+                            <th style="width:50px;">#</th>
+                            <th style="width:80px;">Score</th>
+                            <th style="width:200px;">Title</th>
+                            <th style="width:120px;">Venue/City</th>
+                            <th style="width:150px;">Date/Time</th>
+                            <th>Context Snippet (what LLM sees)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="retrieval-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Context Tab -->
+        <div id="tab-context" class="tab-content">
+            <h3>Context Blocks Sent to LLM</h3>
+            <p style="color:#666; margin-bottom:15px;">Click each block to expand and see full content</p>
+            <div id="context-blocks"></div>
+        </div>
+
+        <!-- Prompt Tab -->
+        <div id="tab-prompt" class="tab-content">
+            <h3>Final Prompt (Exactly as Sent to LLM)</h3>
+            <div id="prompt-display" class="prompt-box"></div>
+        </div>
+
+        <!-- Diagnostics Tab -->
+        <div id="tab-diagnostics" class="tab-content">
+            <h3>Diagnostics &amp; Warnings</h3>
+            <div id="diagnostics-panel" class="diagnostics-panel">
+                <div id="diagnostics-warnings"></div>
+                <div id="diagnostics-stats" class="stats-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div id="actions" class="actions hidden">
+        <a href="#" id="export-json-link" class="btn-secondary" target="_blank">Export JSON</a>
+        <a href="#" id="view-detail-link" class="btn-secondary" target="_blank">View in Admin</a>
+    </div>
+    </div><!-- end main-content -->
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('debug-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const statusBadge = document.getElementById('status-badge');
+    const statusInfo = document.getElementById('status-info');
+    const resultsSection = document.getElementById('results-section');
+    const actions = document.getElementById('actions');
+    const runsList = document.getElementById('runs-list');
+    const statusFilter = document.getElementById('status-filter');
+
+    let currentRunId = null;
+    let recentRuns = [];  // Cache of runs from API
+
+    // ===== SIDEBAR: Previous Runs =====
+
+    async function loadRecentRuns() {
+        const filter = statusFilter.value;
+        const url = `/admin/traces/api/runs/recent/${filter ? '?status=' + filter : ''}`;
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            recentRuns = data.runs;
+            renderRunsList();
+        } catch (error) {
+            runsList.innerHTML = '<div class="no-runs">Failed to load runs</div>';
+        }
+    }
+
+    function renderRunsList() {
+        if (recentRuns.length === 0) {
+            runsList.innerHTML = '<div class="no-runs">No runs yet</div>';
+            return;
+        }
+
+        runsList.innerHTML = recentRuns.map(run => `
+            <div class="run-card ${run.id === currentRunId ? 'selected' : ''}" data-run-id="${run.id}">
+                <div class="run-card-header">
+                    <span class="run-status-dot ${run.status}"></span>
+                    <span class="run-query">${escapeHtml(run.request_text)}</span>
+                </div>
+                <div class="run-meta">
+                    <span>${run.total_latency_ms ? run.total_latency_ms + 'ms' : '-'}</span>
+                    <span>${formatRelativeTime(run.created_at)}</span>
+                </div>
+                <div class="run-actions">
+                    <button type="button" class="load-btn" onclick="event.stopPropagation(); loadPreviousRun('${run.id}')">Load</button>
+                    <button type="button" onclick="event.stopPropagation(); cloneRun('${run.id}')">Clone</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function formatRelativeTime(isoString) {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    // Load a previous run's results
+    window.loadPreviousRun = async function(runId) {
+        currentRunId = runId;
+        renderRunsList();  // Update selection
+
+        statusBadge.className = 'status-badge status-running';
+        statusBadge.textContent = 'Loading';
+        statusInfo.textContent = 'Loading previous run...';
+
+        try {
+            const response = await fetch(`/admin/traces/api/run/${runId}/events/`);
+            const data = await response.json();
+
+            // Update form with the query (read-only indication)
+            document.getElementById('request_text').value = data.request_text;
+
+            // Populate settings from the run
+            if (data.settings) {
+                if (data.settings.max_events) document.getElementById('max_events').value = data.settings.max_events;
+                if (data.settings.similarity_threshold) document.getElementById('similarity_threshold').value = data.settings.similarity_threshold;
+                if (data.settings.location) document.getElementById('location').value = data.settings.location;
+                if (data.settings.max_distance_miles) document.getElementById('max_distance_miles').value = data.settings.max_distance_miles;
+                if (data.settings.time_filter_days) document.getElementById('time_filter_days').value = data.settings.time_filter_days;
+            }
+
+            // Update status
+            const statusColors = { pending: 'pending', running: 'running', success: 'success', error: 'error' };
+            statusBadge.className = `status-badge status-${statusColors[data.status] || 'pending'}`;
+            statusBadge.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            statusInfo.textContent = data.total_latency_ms ? `Completed in ${data.total_latency_ms}ms` : '';
+
+            // Render response
+            document.getElementById('response-box').textContent = data.final_answer_text || 'No response';
+
+            // Render all tabs
+            renderRetrieval(data.events);
+            renderContextBlocks(data.events);
+            renderPrompt(data.events);
+            renderDiagnostics(data.diagnostics);
+
+            // Show results
+            resultsSection.classList.remove('hidden');
+            actions.classList.remove('hidden');
+            document.getElementById('view-detail-link').href = `/admin/traces/chatdebugrun/${runId}/change/`;
+            document.getElementById('export-json-link').href = `/admin/traces/chatdebugrun/${runId}/export/`;
+
+        } catch (error) {
+            statusBadge.className = 'status-badge status-error';
+            statusBadge.textContent = 'Error';
+            statusInfo.textContent = 'Failed to load run';
+        }
+    };
+
+    // Clone a run's settings into the form for re-running
+    window.cloneRun = function(runId) {
+        const run = recentRuns.find(r => r.id === runId);
+        if (!run) return;
+
+        // Populate form
+        document.getElementById('request_text').value = run.request_text.replace(/\.\.\.?$/, '');  // Remove trailing ellipsis
+        if (run.settings) {
+            if (run.settings.max_events) document.getElementById('max_events').value = run.settings.max_events;
+            if (run.settings.similarity_threshold) document.getElementById('similarity_threshold').value = run.settings.similarity_threshold;
+            if (run.settings.location) document.getElementById('location').value = run.settings.location;
+            if (run.settings.max_distance_miles) document.getElementById('max_distance_miles').value = run.settings.max_distance_miles;
+            if (run.settings.time_filter_days) document.getElementById('time_filter_days').value = run.settings.time_filter_days;
+            document.getElementById('use_tools').checked = run.settings.use_tools !== false;  // Default to true
+        }
+
+        // Clear current selection and results
+        currentRunId = null;
+        renderRunsList();
+        resultsSection.classList.add('hidden');
+        actions.classList.add('hidden');
+        statusBadge.className = 'status-badge status-pending';
+        statusBadge.textContent = 'Ready';
+        statusInfo.textContent = 'Cloned from previous run - modify and run';
+
+        // Focus on textarea for editing
+        document.getElementById('request_text').focus();
+    };
+
+    // Filter change handler
+    statusFilter.addEventListener('change', loadRecentRuns);
+
+    // Load runs on page load
+    loadRecentRuns();
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+        });
+    });
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        // Reset UI
+        submitBtn.disabled = true;
+        submitBtn.value = 'Running...';
+        statusBadge.className = 'status-badge status-running';
+        statusBadge.textContent = 'Running';
+        statusInfo.textContent = 'Executing pipeline...';
+        resultsSection.classList.add('hidden');
+        actions.classList.add('hidden');
+
+        // Build settings
+        const settings = {
+            max_events: parseInt(document.getElementById('max_events').value),
+            similarity_threshold: parseFloat(document.getElementById('similarity_threshold').value),
+            time_filter_days: parseInt(document.getElementById('time_filter_days').value),
+            use_tools: document.getElementById('use_tools').checked,
+        };
+
+        const location = document.getElementById('location').value.trim();
+        if (location) settings.location = location;
+
+        const radius = document.getElementById('max_distance_miles').value;
+        if (radius) settings.max_distance_miles = parseFloat(radius);
+
+        try {
+            // Create run
+            const createResponse = await fetch('/admin/traces/api/run/create/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                },
+                body: JSON.stringify({
+                    request_text: document.getElementById('request_text').value,
+                    settings: settings,
+                }),
+            });
+
+            if (!createResponse.ok) throw new Error('Failed to create run');
+
+            const runData = await createResponse.json();
+            currentRunId = runData.run_id;
+
+            // Set up links
+            document.getElementById('view-detail-link').href = runData.detail_url;
+            document.getElementById('export-json-link').href = `/admin/traces/chatdebugrun/${currentRunId}/export/`;
+
+            // Connect to SSE
+            const eventSource = new EventSource(runData.stream_url);
+            const startTime = Date.now();
+            let responseText = '';
+
+            eventSource.addEventListener('token', function(e) {
+                const data = JSON.parse(e.data);
+                responseText += data.content;
+                document.getElementById('response-box').textContent = responseText;
+            });
+
+            eventSource.addEventListener('done', function(e) {
+                eventSource.close();
+                const elapsed = Date.now() - startTime;
+
+                statusBadge.className = 'status-badge status-success';
+                statusBadge.textContent = 'Success';
+                statusInfo.textContent = `Completed in ${elapsed}ms`;
+
+                // Fetch full event data
+                loadFullRunData(currentRunId);
+
+                resultsSection.classList.remove('hidden');
+                actions.classList.remove('hidden');
+                submitBtn.disabled = false;
+                submitBtn.value = 'Run Debug Chat';
+
+                // Refresh sidebar with new run
+                loadRecentRuns();
+            });
+
+            eventSource.addEventListener('error', function(e) {
+                eventSource.close();
+                let msg = 'Unknown error';
+                if (e.data) {
+                    const data = JSON.parse(e.data);
+                    msg = data.message;
+                }
+                document.getElementById('response-box').innerHTML = `<span style="color:red;">Error: ${msg}</span>`;
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.textContent = 'Error';
+                statusInfo.textContent = msg;
+                submitBtn.disabled = false;
+                submitBtn.value = 'Run Debug Chat';
+                loadRecentRuns();  // Refresh sidebar
+            });
+
+            eventSource.onerror = function() {
+                eventSource.close();
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.textContent = 'Connection Error';
+                submitBtn.disabled = false;
+                submitBtn.value = 'Run Debug Chat';
+            };
+
+        } catch (error) {
+            statusBadge.className = 'status-badge status-error';
+            statusBadge.textContent = 'Error';
+            statusInfo.textContent = error.message;
+            submitBtn.disabled = false;
+            submitBtn.value = 'Run Debug Chat';
+        }
+    });
+
+    async function loadFullRunData(runId) {
+        try {
+            const response = await fetch(`/admin/traces/api/run/${runId}/events/`);
+            const data = await response.json();
+
+            renderRetrieval(data.events);
+            renderContextBlocks(data.events);
+            renderPrompt(data.events);
+            renderDiagnostics(data.diagnostics);
+        } catch (error) {
+            console.error('Failed to load run data:', error);
+        }
+    }
+
+    function renderRetrieval(events) {
+        const retrievalEvent = events.find(e => e.stage === 'retrieval');
+        if (!retrievalEvent) return;
+
+        const data = retrievalEvent.data;
+        const candidates = data.candidates || [];
+        const threshold = data.threshold || 0.2;
+
+        // Summary
+        const summary = document.getElementById('retrieval-summary');
+        summary.innerHTML = `
+            <strong>Query:</strong> "${data.query_text || ''}"<br>
+            <strong>Found:</strong> ${data.total_candidates || 0} candidates,
+            ${data.above_threshold || 0} above threshold (${threshold})<br>
+            <strong>Filters:</strong>
+            Geo: ${data.geo_filter_used ? 'Yes' : 'No'},
+            Text: ${data.text_filter_used ? 'Yes' : 'No'}
+            ${retrievalEvent.latency_ms ? ` | <strong>Time:</strong> ${retrievalEvent.latency_ms}ms` : ''}
+        `;
+
+        // Table
+        const tbody = document.getElementById('retrieval-body');
+        tbody.innerHTML = '';
+
+        candidates.forEach((c, i) => {
+            const score = c.similarity_score || 0;
+            const scoreClass = score >= 0.5 ? 'high' : score >= 0.35 ? 'medium' : 'low';
+            const rowClass = c.above_threshold ? 'above' : 'below';
+
+            const row = document.createElement('tr');
+            row.className = rowClass;
+            row.innerHTML = `
+                <td>${i + 1}</td>
+                <td class="score ${scoreClass}">${score.toFixed(3)}</td>
+                <td><strong>${escapeHtml(c.title || 'Untitled')}</strong></td>
+                <td>${escapeHtml(c.venue || '')}${c.city ? ', ' + escapeHtml(c.city) : ''}</td>
+                <td>${c.start_time ? formatDateTime(c.start_time) : '-'}</td>
+                <td class="snippet">${escapeHtml(c.context_snippet || '')}</td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    function renderContextBlocks(events) {
+        const container = document.getElementById('context-blocks');
+        container.innerHTML = '';
+
+        const blockEvents = events.filter(e => e.stage === 'context_block');
+
+        blockEvents.forEach((event, i) => {
+            const data = event.data;
+            const block = document.createElement('div');
+            block.className = 'context-block';
+
+            const pct = data.percent_of_total || 0;
+            const pctColor = pct > 50 ? '#dc3545' : pct > 30 ? '#ffc107' : '#28a745';
+
+            block.innerHTML = `
+                <div class="context-block-header">
+                    <span><strong>${i + 1}. ${data.block_type || 'Unknown'}</strong></span>
+                    <span class="context-block-meta">
+                        ${data.chars?.toLocaleString() || 0} chars |
+                        ~${data.tokens_est?.toLocaleString() || 0} tokens
+                        ${pct ? ` | <span style="color:${pctColor}">${pct}%</span>` : ''}
+                    </span>
+                </div>
+                <div class="context-block-content">${escapeHtml(data.text || '')}</div>
+            `;
+
+            block.querySelector('.context-block-header').addEventListener('click', function() {
+                block.classList.toggle('expanded');
+            });
+
+            container.appendChild(block);
+        });
+    }
+
+    function renderPrompt(events) {
+        const promptEvent = events.find(e => e.stage === 'prompt_final');
+        if (!promptEvent) return;
+
+        const data = promptEvent.data;
+        const display = document.getElementById('prompt-display');
+
+        display.innerHTML = `
+<span class="prompt-label">===== SYSTEM PROMPT (${data.system_prompt?.length || 0} chars) =====</span>
+${escapeHtml(data.system_prompt || '')}
+
+<span class="prompt-label">===== USER PROMPT (${data.user_prompt?.length || 0} chars) =====</span>
+${escapeHtml(data.user_prompt || '')}
+        `;
+    }
+
+    function renderDiagnostics(diagnostics) {
+        if (!diagnostics) return;
+
+        // Warnings
+        const warningsDiv = document.getElementById('diagnostics-warnings');
+        if (diagnostics.warnings && diagnostics.warnings.length > 0) {
+            let html = '<h4>Warnings</h4><ul class="warning-list">';
+            for (const w of diagnostics.warnings) {
+                html += `<li class="warning-${w.severity || 'low'}">[${(w.severity || 'low').toUpperCase()}] ${w.message}</li>`;
+            }
+            html += '</ul>';
+            warningsDiv.innerHTML = html;
+        } else {
+            warningsDiv.innerHTML = '<p style="color:green;">No issues detected!</p>';
+        }
+
+        // Stats
+        const statsDiv = document.getElementById('diagnostics-stats');
+        const rq = diagnostics.retrieval_quality || {};
+        statsDiv.innerHTML = `
+            <div class="stat-box">
+                <div class="value">${diagnostics.total_context_tokens_est || 0}</div>
+                <div class="label">Total Tokens (est)</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${rq.total_candidates || 0}</div>
+                <div class="label">RAG Candidates</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${rq.above_threshold || 0}</div>
+                <div class="label">Above Threshold</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${rq.top_score?.toFixed(3) || '-'}</div>
+                <div class="label">Top Score</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${diagnostics.timing?.retrieval || 0}ms</div>
+                <div class="label">RAG Time</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${diagnostics.timing?.llm_response || 0}ms</div>
+                <div class="label">LLM Time</div>
+            </div>
+        `;
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function formatDateTime(isoString) {
+        try {
+            const d = new Date(isoString);
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) +
+                   ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        } catch {
+            return isoString;
+        }
+    }
+});
+</script>
+{% endblock %}

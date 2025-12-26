@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'venues',
     'locations',
     'api',
+    'traces',
 ]
 
 MIDDLEWARE = [
@@ -235,7 +236,7 @@ TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama")  # 'ollama' or 'bedrock'
 
 # Ollama configuration (for local development)
-LLM_PRIMARY_MODEL = os.environ.get("LLM_PRIMARY_MODEL", "deepseek-llm:7b")
+LLM_PRIMARY_MODEL = os.environ.get("LLM_PRIMARY_MODEL", "qwen2.5:7b")  # Supports tool use
 LLM_BACKUP_MODEL = os.environ.get("LLM_BACKUP_MODEL", "llama3.2:3b")
 
 # AWS Bedrock configuration (for production)

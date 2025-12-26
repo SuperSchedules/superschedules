@@ -42,6 +42,7 @@ app.include_router(debug_routes.router)
 # CORS middleware - allow production and development origins
 allowed_origins = [
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://localhost:3000",
     "https://www.eventzombie.com",
     "https://eventzombie.com",
@@ -614,8 +615,8 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
         def run_rag_search():
             return rag_service.get_context_events(
                 user_message=message,
-                max_events=8,
-                similarity_threshold=0.1,
+                max_events=20,
+                similarity_threshold=0.2,
                 time_filter_days=time_filter_days,
                 date_from=date_from,
                 date_to=date_to,

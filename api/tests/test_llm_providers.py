@@ -28,7 +28,7 @@ class ProviderFactoryTests(TestCase):
         """Test factory returns OllamaProvider when configured."""
         provider = get_llm_provider()
         self.assertIsInstance(provider, OllamaProvider)
-        self.assertEqual(provider.primary_model, 'deepseek-llm:7b')
+        self.assertEqual(provider.primary_model, 'qwen2.5:7b')
 
     @override_settings(LLM_PROVIDER='bedrock')
     def test_factory_returns_bedrock_provider(self):
@@ -64,7 +64,7 @@ class OllamaProviderTests(TestCase):
     def test_ollama_provider_initialization(self, mock_client_class):
         """Test OllamaProvider initializes correctly."""
         provider = OllamaProvider()
-        self.assertEqual(provider.primary_model, 'deepseek-llm:7b')
+        self.assertEqual(provider.primary_model, 'qwen2.5:7b')
         self.assertEqual(provider.backup_model, 'llama3.2:3b')
 
     @patch('api.llm_providers.ollama.ollama.AsyncClient')
@@ -207,8 +207,9 @@ class BedrockProviderTests(TestCase):
         mock_client = MagicMock()
         mock_boto_client.return_value = mock_client
 
+        # Response format must include stop_reason and content with type
         mock_response = {
-            'body': MagicMock(read=lambda: b'{"content": [{"text": "Test response from Claude"}]}')
+            'body': MagicMock(read=lambda: b'{"stop_reason": "end_turn", "content": [{"type": "text", "text": "Test response from Claude"}]}')
         }
         mock_client.invoke_model.return_value = mock_response
 
