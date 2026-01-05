@@ -18,6 +18,14 @@
             Test RAG Queries
         </a>
     </div>
+    <div style="flex: 1; background: #6f42c1; color: white; padding: 1rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem;">Chat Debug</h3>
+        <p style="margin: 0 0 0.5rem 0; opacity: 0.9;">Full pipeline tracing for chat</p>
+        <a href="{% url 'admin:traces_debug_runner' %}"
+           style="display: inline-block; background: white; color: #6f42c1; padding: 0.5rem 1rem; border-radius: 4px; text-decoration: none; font-weight: 600;">
+            Debug Runner
+        </a>
+    </div>
 </div>
 
 {{ block.super }}

@@ -18,7 +18,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 
 from .models import ChatDebugRun, ChatDebugEvent
 from .recorder import TraceRecorder
-from .diagnostics import compute_diagnostics
+from .diagnostics import compute_diagnostics, analyze_response_quality, compare_run_results
 
 
 @staff_member_required
@@ -109,6 +109,13 @@ def stream_debug_run(request, run_id):
             if result['status'] == 'success':
                 # Compute diagnostics
                 diagnostics = compute_diagnostics(recorder.events)
+
+                # Add response quality analysis
+                retrieval_event = next((e for e in recorder.events if e['stage'] == 'retrieval'), None)
+                if retrieval_event:
+                    retrieved_events = retrieval_event['data'].get('candidates', [])
+                    response_quality = analyze_response_quality(result['response'], retrieved_events)
+                    diagnostics['response_quality'] = response_quality
 
                 # Finalize the run
                 recorder.finalize(
@@ -381,4 +388,134 @@ def get_run_events(request, run_id):
         'total_latency_ms': run.total_latency_ms,
         'diagnostics': run.diagnostics,
         'events': events,
+    })
+
+
+@staff_member_required
+@require_POST
+def compare_runs_view(request):
+    """
+    Compare two debug runs side-by-side.
+
+    POST body (JSON):
+    {
+        "run_id_a": "uuid",
+        "run_id_b": "uuid"
+    }
+
+    Returns comparison data including settings diff, metrics diff, and event diff.
+    """
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest('Invalid JSON')
+
+    run_id_a = data.get('run_id_a')
+    run_id_b = data.get('run_id_b')
+
+    if not run_id_a or not run_id_b:
+        return HttpResponseBadRequest('run_id_a and run_id_b are required')
+
+    try:
+        run_a = ChatDebugRun.objects.get(id=UUID(str(run_id_a)))
+        run_b = ChatDebugRun.objects.get(id=UUID(str(run_id_b)))
+    except (ValueError, ChatDebugRun.DoesNotExist) as e:
+        return HttpResponseBadRequest(f'Invalid run_id: {e}')
+
+    # Build run data dicts
+    events_a = list(run_a.events.order_by('seq').values('seq', 'stage', 'data', 'latency_ms'))
+    events_b = list(run_b.events.order_by('seq').values('seq', 'stage', 'data', 'latency_ms'))
+
+    run_a_data = {
+        'run_id': str(run_a.id),
+        'request_text': run_a.request_text,
+        'settings': run_a.settings,
+        'status': run_a.status,
+        'final_answer_text': run_a.final_answer_text,
+        'total_latency_ms': run_a.total_latency_ms,
+        'diagnostics': run_a.diagnostics,
+        'events': events_a,
+    }
+    run_b_data = {
+        'run_id': str(run_b.id),
+        'request_text': run_b.request_text,
+        'settings': run_b.settings,
+        'status': run_b.status,
+        'final_answer_text': run_b.final_answer_text,
+        'total_latency_ms': run_b.total_latency_ms,
+        'diagnostics': run_b.diagnostics,
+        'events': events_b,
+    }
+
+    comparison = compare_run_results(run_a_data, run_b_data)
+
+    return JsonResponse({
+        'run_a': {
+            'id': str(run_a.id),
+            'request_text': run_a.request_text[:100],
+            'status': run_a.status,
+            'total_latency_ms': run_a.total_latency_ms,
+        },
+        'run_b': {
+            'id': str(run_b.id),
+            'request_text': run_b.request_text[:100],
+            'status': run_b.status,
+            'total_latency_ms': run_b.total_latency_ms,
+        },
+        'comparison': comparison,
+        'responses': {
+            'a': run_a.final_answer_text,
+            'b': run_b.final_answer_text,
+        }
+    })
+
+
+@staff_member_required
+@require_POST
+def create_variant_run(request):
+    """
+    Create a new run based on an existing run with modified settings.
+
+    POST body (JSON):
+    {
+        "base_run_id": "uuid",
+        "modified_settings": {
+            "max_events": 30
+        }
+    }
+
+    Returns the new run ID and stream URL.
+    """
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest('Invalid JSON')
+
+    base_run_id = data.get('base_run_id')
+    modified_settings = data.get('modified_settings', {})
+
+    if not base_run_id:
+        return HttpResponseBadRequest('base_run_id is required')
+
+    try:
+        base_run = ChatDebugRun.objects.get(id=UUID(str(base_run_id)))
+    except (ValueError, ChatDebugRun.DoesNotExist):
+        return HttpResponseBadRequest('Invalid base_run_id')
+
+    # Merge settings
+    new_settings = {**base_run.settings, **modified_settings}
+
+    # Create the new run
+    new_run = ChatDebugRun.objects.create(
+        created_by=request.user,
+        request_text=base_run.request_text,
+        settings=new_settings,
+        status='pending',
+    )
+
+    return JsonResponse({
+        'run_id': str(new_run.id),
+        'stream_url': f'/admin/traces/api/run/{new_run.id}/stream/',
+        'base_run_id': str(base_run.id),
+        'modified_settings': modified_settings,
     })

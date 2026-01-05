@@ -8,7 +8,9 @@ Computes "what's messing it up" signals:
 - Missing or weak location/date alignment
 """
 
-from typing import Dict, List, Any
+import re
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 
 def compute_diagnostics(events: List[Dict]) -> Dict[str, Any]:
@@ -246,3 +248,441 @@ def format_diagnostics_html(diagnostics: Dict) -> str:
         parts.append('</div>')
 
     return '\n'.join(parts)
+
+
+# =============================================================================
+# Response Quality Analysis
+# =============================================================================
+
+def analyze_response_quality(response_text: str, retrieved_events: List[Dict]) -> Dict[str, Any]:
+    """
+    Analyze LLM response to determine how well it used retrieved events.
+
+    Args:
+        response_text: The LLM's response text
+        retrieved_events: List of event dicts from retrieval stage
+
+    Returns:
+        Dict with events_analyzed, coverage metrics, hallucinations, accuracy_issues
+    """
+    if not response_text or not retrieved_events:
+        return {
+            'events_analyzed': [],
+            'coverage': {'total': 0, 'mentioned': 0, 'high_relevance_mentioned': 0, 'high_relevance_total': 0},
+            'hallucinations': [],
+            'accuracy_issues': [],
+        }
+
+    # Analyze each event for mentions
+    events_analyzed = []
+    for event in retrieved_events:
+        mention_result = find_event_mention(response_text, event)
+        accuracy = check_event_accuracy(response_text, event) if mention_result['mentioned'] else {}
+
+        events_analyzed.append({
+            'id': event.get('id'),
+            'title': event.get('title', ''),
+            'similarity_score': event.get('similarity_score', 0),
+            'mention_status': 'mentioned' if mention_result['mentioned'] else 'ignored',
+            'match_type': mention_result.get('match_type'),
+            'accuracy': accuracy,
+        })
+
+    # Compute coverage metrics
+    total = len(events_analyzed)
+    mentioned = sum(1 for e in events_analyzed if e['mention_status'] == 'mentioned')
+    high_relevance_total = sum(1 for e in events_analyzed if e['similarity_score'] >= 0.6)
+    high_relevance_mentioned = sum(1 for e in events_analyzed if e['similarity_score'] >= 0.6 and e['mention_status'] == 'mentioned')
+
+    coverage = {
+        'total': total,
+        'mentioned': mentioned,
+        'ignored': total - mentioned,
+        'coverage_rate': round(mentioned / total, 2) if total > 0 else 0,
+        'high_relevance_total': high_relevance_total,
+        'high_relevance_mentioned': high_relevance_mentioned,
+        'high_relevance_coverage': round(high_relevance_mentioned / high_relevance_total, 2) if high_relevance_total > 0 else 0,
+    }
+
+    # Detect potential hallucinations
+    hallucinations = detect_hallucinated_events(response_text, retrieved_events)
+
+    # Collect accuracy issues
+    accuracy_issues = []
+    for event in events_analyzed:
+        if event.get('accuracy'):
+            acc = event['accuracy']
+            if acc.get('date_issue'):
+                accuracy_issues.append({
+                    'event_id': event['id'],
+                    'event_title': event['title'],
+                    'issue_type': 'date_mismatch',
+                    'message': acc['date_issue'],
+                })
+            if acc.get('location_issue'):
+                accuracy_issues.append({
+                    'event_id': event['id'],
+                    'event_title': event['title'],
+                    'issue_type': 'location_mismatch',
+                    'message': acc['location_issue'],
+                })
+
+    return {
+        'events_analyzed': events_analyzed,
+        'coverage': coverage,
+        'hallucinations': hallucinations,
+        'accuracy_issues': accuracy_issues,
+    }
+
+
+def find_event_mention(response_text: str, event: Dict) -> Dict[str, Any]:
+    """
+    Check if an event is mentioned in the response text.
+
+    Uses multiple matching strategies:
+    1. Exact title match (case-insensitive)
+    2. Partial title match (first 3+ significant words)
+    3. Venue + time combination
+
+    Returns:
+        {'mentioned': bool, 'match_type': str or None}
+    """
+    response_lower = response_text.lower()
+    title = event.get('title', '')
+    title_lower = title.lower()
+
+    # Strategy 1: Exact title match
+    if title_lower and title_lower in response_lower:
+        return {'mentioned': True, 'match_type': 'exact_title'}
+
+    # Strategy 2: Partial title match (first 3+ significant words)
+    if title:
+        # Remove common stop words and get significant words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'for', 'of', 'to', 'in', 'at', 'on', 'with'}
+        words = [w for w in re.findall(r'\b\w+\b', title_lower) if w not in stop_words and len(w) > 2]
+
+        if len(words) >= 3:
+            # Check if first 3 significant words appear together (within 20 chars of each other)
+            pattern = r'\b' + r'.{0,20}'.join(re.escape(w) for w in words[:3]) + r'\b'
+            if re.search(pattern, response_lower, re.IGNORECASE):
+                return {'mentioned': True, 'match_type': 'partial_title'}
+
+        elif len(words) >= 2:
+            # For shorter titles, require both significant words
+            pattern = r'\b' + r'.{0,15}'.join(re.escape(w) for w in words[:2]) + r'\b'
+            if re.search(pattern, response_lower, re.IGNORECASE):
+                return {'mentioned': True, 'match_type': 'partial_title'}
+
+    # Strategy 3: Venue + time mentioned together
+    venue = event.get('venue', '') or event.get('location', '')
+    start_time = event.get('start_time', '')
+
+    if venue and start_time:
+        venue_lower = venue.lower()
+        # Extract venue name (first part before comma or full name)
+        venue_name = venue_lower.split(',')[0].strip()
+
+        # Check if venue name appears in response
+        if venue_name and len(venue_name) > 3 and venue_name in response_lower:
+            # Also check if a time-like pattern appears nearby
+            time_patterns = _extract_time_mentions(response_text)
+            if time_patterns:
+                return {'mentioned': True, 'match_type': 'venue_time'}
+
+    return {'mentioned': False, 'match_type': None}
+
+
+def _extract_time_mentions(text: str) -> List[str]:
+    """Extract time-like patterns from text."""
+    patterns = [
+        r'\b\d{1,2}:\d{2}\s*(?:am|pm|AM|PM)?\b',  # 10:00 AM
+        r'\b\d{1,2}\s*(?:am|pm|AM|PM)\b',          # 10 AM
+        r'\b(?:morning|afternoon|evening|noon)\b',  # morning, afternoon, etc.
+    ]
+    matches = []
+    for pattern in patterns:
+        matches.extend(re.findall(pattern, text, re.IGNORECASE))
+    return matches
+
+
+def check_event_accuracy(response_text: str, event: Dict) -> Dict[str, Any]:
+    """
+    Check if the event details mentioned in the response are accurate.
+
+    Returns dict with:
+    - date_ok: bool
+    - location_ok: bool
+    - date_issue: str or None
+    - location_issue: str or None
+    """
+    result = {}
+    response_lower = response_text.lower()
+    title_lower = event.get('title', '').lower()
+
+    # Find the section of response that mentions this event (within 200 chars of title)
+    title_pos = response_lower.find(title_lower)
+    if title_pos == -1:
+        # Try to find by first few words
+        words = title_lower.split()[:3]
+        if words:
+            for i, word in enumerate(words):
+                pos = response_lower.find(word)
+                if pos != -1:
+                    title_pos = pos
+                    break
+
+    if title_pos == -1:
+        return result  # Can't verify if we can't find the event mention
+
+    # Extract context around the event mention
+    context_start = max(0, title_pos - 50)
+    context_end = min(len(response_lower), title_pos + 300)
+    context = response_lower[context_start:context_end]
+
+    # Check date accuracy
+    start_time = event.get('start_time')
+    if start_time:
+        try:
+            if isinstance(start_time, str):
+                event_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            else:
+                event_dt = start_time
+
+            event_day = event_dt.strftime('%A').lower()  # Monday, Tuesday, etc.
+            event_date = event_dt.strftime('%B %d').lower()  # January 15
+
+            # Check if the correct day is mentioned in context
+            days_mentioned = re.findall(r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', context)
+            if days_mentioned and event_day not in days_mentioned:
+                result['date_issue'] = f"Response mentions {days_mentioned[0]} but event is on {event_day}"
+                result['date_ok'] = False
+            else:
+                result['date_ok'] = True
+        except (ValueError, TypeError):
+            pass
+
+    # Check location accuracy
+    venue = event.get('venue', '') or event.get('location', '')
+    city = event.get('city', '')
+
+    if venue or city:
+        venue_lower = venue.lower() if venue else ''
+        city_lower = city.lower() if city else ''
+
+        # Extract venue name
+        venue_name = venue_lower.split(',')[0].strip() if venue_lower else ''
+
+        # Check if correct venue/city appears near the event mention
+        if venue_name and len(venue_name) > 3:
+            if venue_name not in context and city_lower not in context:
+                # Check if a different location is mentioned
+                location_pattern = r'\bat\s+(?:the\s+)?([A-Za-z\s]+(?:Library|Center|Hall|Room|Park|School|Museum))'
+                other_locations = re.findall(location_pattern, response_text[context_start:context_end], re.IGNORECASE)
+                if other_locations:
+                    result['location_issue'] = f"Response mentions '{other_locations[0]}' but event is at '{venue_name}'"
+                    result['location_ok'] = False
+                else:
+                    result['location_ok'] = True
+            else:
+                result['location_ok'] = True
+
+    return result
+
+
+def detect_hallucinated_events(response_text: str, known_events: List[Dict]) -> List[Dict]:
+    """
+    Detect potential hallucinated events - event-like mentions not in known_events.
+
+    Looks for patterns like:
+    - "Event Name" followed by time/location
+    - Bullet points with event-like content
+    - Bold text that looks like event titles
+
+    Returns list of potential hallucinations with confidence levels.
+    """
+    hallucinations = []
+
+    # Pattern 1: Look for bold text (markdown **text**) that might be event titles
+    bold_pattern = r'\*\*([^*]+)\*\*'
+    bold_matches = re.findall(bold_pattern, response_text)
+
+    known_titles = {e.get('title', '').lower() for e in known_events}
+    known_titles.discard('')
+
+    for match in bold_matches:
+        match_lower = match.lower().strip()
+        # Skip if it matches a known event
+        if any(match_lower in known or known in match_lower for known in known_titles if known):
+            continue
+
+        # Skip common non-event bold text
+        skip_phrases = ['note', 'important', 'tip', 'warning', 'summary', 'here are', 'i found']
+        if any(phrase in match_lower for phrase in skip_phrases):
+            continue
+
+        # Check if this looks like an event title (has event-like words)
+        event_indicators = ['class', 'workshop', 'session', 'storytime', 'story time', 'program', 'event', 'show', 'performance', 'concert', 'exhibit']
+        if any(indicator in match_lower for indicator in event_indicators):
+            hallucinations.append({
+                'text': match,
+                'confidence': 0.7,
+                'reason': 'Bold text looks like event title but not in retrieved events',
+            })
+
+    # Pattern 2: Look for numbered list items that look like events
+    numbered_pattern = r'^\s*\d+\.\s*\*?\*?([^*\n]+)'
+    for match in re.finditer(numbered_pattern, response_text, re.MULTILINE):
+        text = match.group(1).strip()
+        text_lower = text.lower()
+
+        # Skip if matches known event
+        if any(text_lower in known or known in text_lower for known in known_titles if known):
+            continue
+
+        # Check if it has time/location indicators (suggesting it's an event recommendation)
+        if re.search(r'\b(at|on|from)\s+\d', text_lower) or re.search(r'\b\d{1,2}:\d{2}', text):
+            # This looks like an event with time
+            if not any(text_lower in known or known in text_lower for known in known_titles if known):
+                hallucinations.append({
+                    'text': text[:100],
+                    'confidence': 0.6,
+                    'reason': 'Numbered item with time/date not matching retrieved events',
+                })
+
+    return hallucinations
+
+
+# =============================================================================
+# Comparative Analysis
+# =============================================================================
+
+def compare_run_results(run_a: Dict, run_b: Dict) -> Dict[str, Any]:
+    """
+    Compare two debug run results and compute differences.
+
+    Args:
+        run_a: First run data (from get_run_events API)
+        run_b: Second run data
+
+    Returns:
+        Dict with settings_diff, metrics_diff, events_diff, response_diff
+    """
+    # Compare settings
+    settings_a = run_a.get('settings', {})
+    settings_b = run_b.get('settings', {})
+    settings_diff = {}
+
+    all_keys = set(settings_a.keys()) | set(settings_b.keys())
+    for key in all_keys:
+        val_a = settings_a.get(key)
+        val_b = settings_b.get(key)
+        if val_a != val_b:
+            settings_diff[key] = {'a': val_a, 'b': val_b}
+
+    # Compare metrics
+    diag_a = run_a.get('diagnostics', {}) or {}
+    diag_b = run_b.get('diagnostics', {}) or {}
+
+    rq_a = diag_a.get('retrieval_quality', {})
+    rq_b = diag_b.get('retrieval_quality', {})
+
+    metrics_diff = {
+        'total_candidates': {'a': rq_a.get('total_candidates', 0), 'b': rq_b.get('total_candidates', 0)},
+        'above_threshold': {'a': rq_a.get('above_threshold', 0), 'b': rq_b.get('above_threshold', 0)},
+        'top_score': {'a': rq_a.get('top_score', 0), 'b': rq_b.get('top_score', 0)},
+        'total_latency_ms': {'a': run_a.get('total_latency_ms', 0), 'b': run_b.get('total_latency_ms', 0)},
+        'response_length': {
+            'a': len(run_a.get('final_answer_text', '')),
+            'b': len(run_b.get('final_answer_text', '')),
+        },
+    }
+
+    # Add diff values
+    for key in metrics_diff:
+        a_val = metrics_diff[key]['a'] or 0
+        b_val = metrics_diff[key]['b'] or 0
+        metrics_diff[key]['diff'] = b_val - a_val
+
+    # Compare events
+    events_a = _extract_retrieval_events(run_a.get('events', []))
+    events_b = _extract_retrieval_events(run_b.get('events', []))
+    events_diff = compute_event_diff(events_a, events_b)
+
+    # Compare responses (simple summary)
+    response_a = run_a.get('final_answer_text', '')
+    response_b = run_b.get('final_answer_text', '')
+    response_diff = {
+        'length_a': len(response_a),
+        'length_b': len(response_b),
+        'length_diff': len(response_b) - len(response_a),
+    }
+
+    return {
+        'settings_diff': settings_diff,
+        'metrics_diff': metrics_diff,
+        'events_diff': events_diff,
+        'response_diff': response_diff,
+    }
+
+
+def _extract_retrieval_events(events: List[Dict]) -> List[Dict]:
+    """Extract candidate events from trace events list."""
+    for event in events:
+        if event.get('stage') == 'retrieval':
+            return event.get('data', {}).get('candidates', [])
+    return []
+
+
+def compute_event_diff(events_a: List[Dict], events_b: List[Dict]) -> Dict[str, Any]:
+    """
+    Compare two event lists by event ID.
+
+    Returns:
+        {
+            'only_in_a': [...],
+            'only_in_b': [...],
+            'in_both': [...],
+            'score_changes': [...]
+        }
+    """
+    ids_a = {e.get('id') for e in events_a if e.get('id')}
+    ids_b = {e.get('id') for e in events_b if e.get('id')}
+
+    only_in_a_ids = ids_a - ids_b
+    only_in_b_ids = ids_b - ids_a
+    in_both_ids = ids_a & ids_b
+
+    # Build lookup dicts
+    events_a_by_id = {e.get('id'): e for e in events_a if e.get('id')}
+    events_b_by_id = {e.get('id'): e for e in events_b if e.get('id')}
+
+    only_in_a = [
+        {'id': eid, 'title': events_a_by_id[eid].get('title', ''), 'score': events_a_by_id[eid].get('similarity_score', 0)}
+        for eid in only_in_a_ids
+    ]
+    only_in_b = [
+        {'id': eid, 'title': events_b_by_id[eid].get('title', ''), 'score': events_b_by_id[eid].get('similarity_score', 0)}
+        for eid in only_in_b_ids
+    ]
+    in_both = [
+        {'id': eid, 'title': events_a_by_id[eid].get('title', ''), 'score_a': events_a_by_id[eid].get('similarity_score', 0), 'score_b': events_b_by_id[eid].get('similarity_score', 0)}
+        for eid in in_both_ids
+    ]
+
+    # Find significant score changes
+    score_changes = [
+        e for e in in_both
+        if abs((e.get('score_a', 0) or 0) - (e.get('score_b', 0) or 0)) > 0.1
+    ]
+
+    return {
+        'only_in_a': sorted(only_in_a, key=lambda x: x.get('score', 0), reverse=True),
+        'only_in_b': sorted(only_in_b, key=lambda x: x.get('score', 0), reverse=True),
+        'in_both': sorted(in_both, key=lambda x: x.get('score_a', 0), reverse=True),
+        'score_changes': score_changes,
+        'summary': {
+            'only_a_count': len(only_in_a),
+            'only_b_count': len(only_in_b),
+            'in_both_count': len(in_both),
+        }
+    }

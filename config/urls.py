@@ -22,6 +22,7 @@ api.add_router("", health_router)
 urlpatterns = [
     path("grappelli/", include("grappelli.urls")),
     path("admin/rag-tester/", rag_tester_view, name="admin_rag_tester"),
+    path("admin/traces/api/", include("traces.urls")),  # Traces API before admin.site.urls
     path("admin/", admin.site.urls),
     # JWT token endpoints - no trailing slash (API convention)
     path("api/v1/token", TokenObtainPairView.as_view(), name="token_obtain_pair"),

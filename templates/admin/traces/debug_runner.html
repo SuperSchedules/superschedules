@@ -215,6 +215,7 @@
             <button class="tab-btn" data-tab="context">Context Blocks</button>
             <button class="tab-btn" data-tab="prompt">Final Prompt</button>
             <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
+            <button class="tab-btn" data-tab="response-quality">Response Quality</button>
         </div>
 
         <!-- Response Tab -->
@@ -265,6 +266,17 @@
             <div id="diagnostics-panel" class="diagnostics-panel">
                 <div id="diagnostics-warnings"></div>
                 <div id="diagnostics-stats" class="stats-grid"></div>
+            </div>
+        </div>
+
+        <!-- Response Quality Tab -->
+        <div id="tab-response-quality" class="tab-content">
+            <h3>Response Quality Analysis</h3>
+            <div id="response-quality-panel">
+                <div id="rq-coverage" class="stats-grid" style="margin-bottom: 20px;"></div>
+                <div id="rq-events-table" style="margin-bottom: 20px;"></div>
+                <div id="rq-hallucinations"></div>
+                <div id="rq-accuracy-issues"></div>
             </div>
         </div>
     </div>
@@ -326,6 +338,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="run-actions">
                     <button type="button" class="load-btn" onclick="event.stopPropagation(); loadPreviousRun('${run.id}')">Load</button>
                     <button type="button" onclick="event.stopPropagation(); cloneRun('${run.id}')">Clone</button>
+                    <button type="button" onclick="event.stopPropagation(); startComparison('${run.id}')">Compare</button>
                 </div>
             </div>
         `).join('');
@@ -709,6 +722,218 @@ ${escapeHtml(data.user_prompt || '')}
                 <div class="label">LLM Time</div>
             </div>
         `;
+
+        // Response Quality
+        renderResponseQuality(diagnostics.response_quality);
+    }
+
+    function renderResponseQuality(rq) {
+        if (!rq) {
+            document.getElementById('rq-coverage').innerHTML = '<p style="color:#666;">No response quality data available</p>';
+            return;
+        }
+
+        const coverage = rq.coverage || {};
+
+        // Coverage stats
+        document.getElementById('rq-coverage').innerHTML = `
+            <div class="stat-box">
+                <div class="value">${coverage.mentioned || 0}/${coverage.total || 0}</div>
+                <div class="label">Events Mentioned</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${Math.round((coverage.coverage_rate || 0) * 100)}%</div>
+                <div class="label">Coverage Rate</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${coverage.high_relevance_mentioned || 0}/${coverage.high_relevance_total || 0}</div>
+                <div class="label">High-Relevance Mentioned</div>
+            </div>
+            <div class="stat-box">
+                <div class="value">${Math.round((coverage.high_relevance_coverage || 0) * 100)}%</div>
+                <div class="label">High-Relevance Coverage</div>
+            </div>
+        `;
+
+        // Events table
+        const events = rq.events_analyzed || [];
+        if (events.length > 0) {
+            let html = '<h4>Event Mention Analysis</h4>';
+            html += '<table class="retrieval-table"><thead><tr><th>Event</th><th>Score</th><th>Status</th><th>Match Type</th></tr></thead><tbody>';
+            for (const e of events) {
+                const statusColor = e.mention_status === 'mentioned' ? '#28a745' : '#dc3545';
+                const statusIcon = e.mention_status === 'mentioned' ? '✓' : '✗';
+                html += `<tr>
+                    <td>${escapeHtml(e.title || 'Untitled')}</td>
+                    <td class="score ${e.similarity_score >= 0.6 ? 'high' : 'medium'}">${(e.similarity_score || 0).toFixed(3)}</td>
+                    <td style="color:${statusColor};font-weight:bold;">${statusIcon} ${e.mention_status}</td>
+                    <td>${e.match_type || '-'}</td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            document.getElementById('rq-events-table').innerHTML = html;
+        }
+
+        // Hallucinations
+        const hallucinations = rq.hallucinations || [];
+        if (hallucinations.length > 0) {
+            let html = '<h4 style="color:#dc3545;">Potential Hallucinations</h4><ul class="warning-list">';
+            for (const h of hallucinations) {
+                html += `<li class="warning-high">"${escapeHtml(h.text)}" - ${h.reason}</li>`;
+            }
+            html += '</ul>';
+            document.getElementById('rq-hallucinations').innerHTML = html;
+        } else {
+            document.getElementById('rq-hallucinations').innerHTML = '';
+        }
+
+        // Accuracy issues
+        const issues = rq.accuracy_issues || [];
+        if (issues.length > 0) {
+            let html = '<h4 style="color:#ffc107;">Accuracy Issues</h4><ul class="warning-list">';
+            for (const issue of issues) {
+                html += `<li class="warning-medium">${escapeHtml(issue.event_title)}: ${issue.message}</li>`;
+            }
+            html += '</ul>';
+            document.getElementById('rq-accuracy-issues').innerHTML = html;
+        } else {
+            document.getElementById('rq-accuracy-issues').innerHTML = '';
+        }
+    }
+
+    // ===== COMPARISON MODE =====
+    let comparisonRunId = null;
+
+    window.startComparison = async function(runId) {
+        if (!currentRunId) {
+            alert('Please load a run first, then click Compare on another run to compare them.');
+            return;
+        }
+        if (runId === currentRunId) {
+            alert('Cannot compare a run with itself. Select a different run.');
+            return;
+        }
+
+        comparisonRunId = runId;
+        statusInfo.textContent = 'Loading comparison...';
+
+        try {
+            const response = await fetch('/admin/traces/api/run/compare/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                },
+                body: JSON.stringify({
+                    run_id_a: currentRunId,
+                    run_id_b: comparisonRunId,
+                }),
+            });
+
+            if (!response.ok) throw new Error('Failed to compare runs');
+            const data = await response.json();
+
+            showComparisonResults(data);
+        } catch (error) {
+            statusInfo.textContent = 'Comparison failed: ' + error.message;
+        }
+    };
+
+    function showComparisonResults(data) {
+        // Create comparison modal/panel
+        const existingModal = document.getElementById('comparison-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'comparison-modal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;overflow-y:auto;padding:40px;';
+
+        const content = document.createElement('div');
+        content.style.cssText = 'background:white;max-width:1200px;margin:0 auto;border-radius:8px;padding:30px;';
+
+        const comp = data.comparison;
+        const settingsDiff = comp.settings_diff || {};
+        const metricsDiff = comp.metrics_diff || {};
+        const eventsDiff = comp.events_diff || {};
+
+        let html = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h2 style="margin:0;">Run Comparison</h2>
+                <button onclick="document.getElementById('comparison-modal').remove()" style="padding:8px 16px;cursor:pointer;">Close</button>
+            </div>
+
+            <h3>Settings Differences</h3>
+            ${Object.keys(settingsDiff).length > 0 ? `
+            <table class="retrieval-table">
+                <thead><tr><th>Setting</th><th>Run A</th><th>Run B</th></tr></thead>
+                <tbody>
+                ${Object.entries(settingsDiff).map(([key, val]) => `
+                    <tr><td>${key}</td><td>${val.a || '-'}</td><td>${val.b || '-'}</td></tr>
+                `).join('')}
+                </tbody>
+            </table>` : '<p>No settings differences</p>'}
+
+            <h3>Metrics Comparison</h3>
+            <table class="retrieval-table">
+                <thead><tr><th>Metric</th><th>Run A</th><th>Run B</th><th>Diff</th></tr></thead>
+                <tbody>
+                ${Object.entries(metricsDiff).map(([key, val]) => `
+                    <tr>
+                        <td>${key}</td>
+                        <td>${val.a || 0}</td>
+                        <td>${val.b || 0}</td>
+                        <td style="color:${val.diff > 0 ? '#28a745' : val.diff < 0 ? '#dc3545' : '#666'}">
+                            ${val.diff > 0 ? '+' : ''}${val.diff || 0}
+                        </td>
+                    </tr>
+                `).join('')}
+                </tbody>
+            </table>
+
+            <h3>Event Differences</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
+                <div>
+                    <h4>Only in Run A (${eventsDiff.summary?.only_a_count || 0})</h4>
+                    <ul style="max-height:200px;overflow-y:auto;">
+                    ${(eventsDiff.only_in_a || []).map(e => `<li>${escapeHtml(e.title)} (${(e.score || 0).toFixed(3)})</li>`).join('') || '<li>None</li>'}
+                    </ul>
+                </div>
+                <div>
+                    <h4>In Both (${eventsDiff.summary?.in_both_count || 0})</h4>
+                    <ul style="max-height:200px;overflow-y:auto;">
+                    ${(eventsDiff.in_both || []).slice(0, 10).map(e => `<li>${escapeHtml(e.title)}</li>`).join('') || '<li>None</li>'}
+                    </ul>
+                </div>
+                <div>
+                    <h4>Only in Run B (${eventsDiff.summary?.only_b_count || 0})</h4>
+                    <ul style="max-height:200px;overflow-y:auto;">
+                    ${(eventsDiff.only_in_b || []).map(e => `<li>${escapeHtml(e.title)} (${(e.score || 0).toFixed(3)})</li>`).join('') || '<li>None</li>'}
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Response Comparison</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+                <div>
+                    <h4>Run A (${data.responses.a?.length || 0} chars)</h4>
+                    <div class="response-box" style="max-height:300px;">${escapeHtml(data.responses.a || '')}</div>
+                </div>
+                <div>
+                    <h4>Run B (${data.responses.b?.length || 0} chars)</h4>
+                    <div class="response-box" style="max-height:300px;">${escapeHtml(data.responses.b || '')}</div>
+                </div>
+            </div>
+        `;
+
+        content.innerHTML = html;
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) modal.remove();
+        });
+
+        statusInfo.textContent = 'Comparison loaded';
     }
 
     function escapeHtml(text) {

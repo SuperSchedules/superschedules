@@ -4,10 +4,13 @@ Uses provider abstraction to support multiple LLM backends (Ollama, Bedrock, etc
 """
 
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from datetime import datetime
 
 from .llm_providers import get_llm_provider, ModelResponse
+
+if TYPE_CHECKING:
+    from traces.recorder import TraceRecorder
 
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,7 @@ def create_event_discovery_prompt(
     context: Dict[str, Any],
     conversation_history: List[Dict[str, str]] = None,
     user_preferences: Dict[str, Any] = None,
+    trace: Optional['TraceRecorder'] = None,
 ) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat with conversation context."""
 
@@ -254,6 +258,95 @@ Now respond to the user using only the information provided below."""
     user_prompt_parts.append("Now respond helpfully to the user. Remember to be conversational!")
 
     user_prompt = "\n".join(user_prompt_parts)
+
+    # Record trace events for each context block
+    if trace:
+        # System prompt block
+        trace.event('context_block', {
+            'block_type': 'system_prompt',
+            'text': system_prompt,
+            'chars': len(system_prompt),
+            'tokens_est': len(system_prompt) // 4,
+        })
+
+        # User profile block
+        if profile_lines:
+            profile_text = "ABOUT THIS USER:\n" + "\n".join(profile_lines)
+            trace.event('context_block', {
+                'block_type': 'user_profile',
+                'text': profile_text,
+                'chars': len(profile_text),
+                'tokens_est': len(profile_text) // 4,
+            })
+
+        # Conversation history block
+        if conversation_history and len(conversation_history) > 0:
+            history_text = "\n".join(
+                f"{'User' if msg['role'] == 'user' else 'You'}: {msg['content'][:300]}"
+                for msg in conversation_history[-10:]
+            )
+            trace.event('context_block', {
+                'block_type': 'conversation_history',
+                'text': history_text,
+                'chars': len(history_text),
+                'tokens_est': len(history_text) // 4,
+                'message_count': len(conversation_history[-10:]),
+            })
+
+        # Current context block (date, location, filters)
+        context_text = f"TODAY'S DATE: {context.get('current_date', 'unknown')}"
+        if context.get('location'):
+            context_text += f"\nLOCATION: {context.get('location')}"
+        if context.get('date_range'):
+            date_range = context['date_range']
+            from_date = date_range.get('from', '')
+            to_date = date_range.get('to', '')
+            if from_date or to_date:
+                context_text += f"\nDATE FILTER: {from_date} to {to_date}"
+        trace.event('context_block', {
+            'block_type': 'current_context',
+            'text': context_text,
+            'chars': len(context_text),
+            'tokens_est': len(context_text) // 4,
+        })
+
+        # User message block
+        user_message_text = f'USER SAYS: "{message}"'
+        trace.event('context_block', {
+            'block_type': 'user_message',
+            'text': user_message_text,
+            'chars': len(user_message_text),
+            'tokens_est': len(user_message_text) // 4,
+        })
+
+        # Events block - the main retrieval context
+        # Find the events section in user_prompt_parts
+        events_start = None
+        for i, part in enumerate(user_prompt_parts):
+            if "EVENTS YOU CAN RECOMMEND" in part:
+                events_start = i
+                break
+
+        if events_start is not None:
+            # Everything from events header to the end instructions
+            events_text = "\n".join(user_prompt_parts[events_start:-2])  # Exclude final instructions
+            trace.event('context_block', {
+                'block_type': 'retrieved_events',
+                'text': events_text,
+                'chars': len(events_text),
+                'tokens_est': len(events_text) // 4,
+                'event_count': len(events) if events else 0,
+                'event_ids': [e.get('id') for e in events] if events else [],
+            })
+
+        # Final prompt event with complete prompts
+        trace.event('prompt_final', {
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'total_chars': len(system_prompt) + len(user_prompt),
+            'total_tokens_est': (len(system_prompt) + len(user_prompt)) // 4,
+        })
+
     return system_prompt, user_prompt
 
 
