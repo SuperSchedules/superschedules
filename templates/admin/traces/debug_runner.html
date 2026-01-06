@@ -586,14 +586,31 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderRetrieval(events) {
         const retrievalEvent = events.find(e => e.stage === 'retrieval');
-        if (!retrievalEvent) return;
+        const summary = document.getElementById('retrieval-summary');
+        const tbody = document.getElementById('retrieval-body');
+
+        if (!retrievalEvent) {
+            // Debug: log what events we do have
+            console.log('No retrieval event found. Available events:', events.map(e => e.stage));
+            summary.innerHTML = `
+                <div style="color: #856404; background: #fff3cd; padding: 15px; border-radius: 4px;">
+                    <strong>No retrieval data available.</strong><br>
+                    This could mean:<br>
+                    - The RAG search didn't run (check for errors)<br>
+                    - This is an older run before retrieval tracing was added<br>
+                    <br>
+                    <small>Events recorded: ${events.map(e => e.stage).join(', ') || 'none'}</small>
+                </div>
+            `;
+            tbody.innerHTML = '';
+            return;
+        }
 
         const data = retrievalEvent.data;
         const candidates = data.candidates || [];
         const threshold = data.threshold || 0.2;
 
         // Summary
-        const summary = document.getElementById('retrieval-summary');
         summary.innerHTML = `
             <strong>Query:</strong> "${data.query_text || ''}"<br>
             <strong>Found:</strong> ${data.total_candidates || 0} candidates,
@@ -605,7 +622,6 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
 
         // Table
-        const tbody = document.getElementById('retrieval-body');
         tbody.innerHTML = '';
 
         candidates.forEach((c, i) => {
