@@ -359,6 +359,7 @@ PASSWORD_RESET_TIMEOUT=3600          # 1 hour
 ### For AI Assistants
 - **NEVER create files unless absolutely necessary** - Always prefer editing existing files
 - **NEVER proactively create documentation files** (*.md, README) unless explicitly requested
+- **When adding Python dependencies**: Update BOTH `requirements.txt` (local dev) AND `requirements-prod.txt` (Docker/production)
 - Follow TDD: Write tests first, then implement
 - Keep functions small and testable with dependency injection
 - Use type hints and clear docstrings
