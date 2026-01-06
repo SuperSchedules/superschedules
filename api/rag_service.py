@@ -10,14 +10,14 @@ from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
 from pgvector.django import CosineDistance
 
 from events.models import Event
-from api.date_extraction import extract_dates_from_query
+# NOTE: sentence_transformers and dateparser are lazy-imported to reduce startup memory
+# See _load_model() and get_context_events() for the lazy imports
 
 if TYPE_CHECKING:
     from traces.recorder import TraceRecorder
@@ -56,6 +56,7 @@ class EventRAGService:
     def _load_model(self):
         """Lazy load the sentence transformer model."""
         if self.model is None:
+            from sentence_transformers import SentenceTransformer
             logger.info(f"Loading sentence transformer model: {self.model_name}")
             self.model = SentenceTransformer(self.model_name)
     
@@ -325,6 +326,7 @@ class EventRAGService:
             # Step 1b: Extract dates from natural language query (if no explicit dates provided)
             date_extraction_result = None
             if date_from is None and date_to is None:
+                from api.date_extraction import extract_dates_from_query
                 date_extraction_result = extract_dates_from_query(user_message, timezone.localtime(timezone.now()))
                 if date_extraction_result.date_from and date_extraction_result.confidence >= 0.5:
                     date_from = timezone.make_aware(date_extraction_result.date_from)
