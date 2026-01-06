@@ -51,7 +51,7 @@ class EventRAGService:
         """Initialize with a compact, fast sentence transformer model."""
         self.model_name = model_name
         self.model = None
-        self._load_model()
+        # Model is lazy-loaded on first use to avoid OOM at startup
     
     def _load_model(self):
         """Lazy load the sentence transformer model."""
