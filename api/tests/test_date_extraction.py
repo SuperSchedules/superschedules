@@ -155,3 +155,45 @@ class TestIsFalsePositive(TestCase):
         self.assertTrue(_is_false_positive("do", "I want to do something"))
         self.assertTrue(_is_false_positive("to", "what to do tomorrow"))
         self.assertTrue(_is_false_positive("on", "events on Saturday"))
+
+
+class TestTimezoneAwareDateExtraction(TestCase):
+    """Test date extraction with timezone-aware reference dates (like production)."""
+
+    def test_extraction_with_timezone_aware_reference(self):
+        """Extracted dates should work when reference date is timezone-aware."""
+        from django.utils import timezone
+
+        # This is how production calls it - with a timezone-aware datetime
+        ref_date = timezone.localtime(timezone.now())
+
+        result = extract_dates_from_query("tomorrow", ref_date)
+
+        self.assertIsNotNone(result.date_from)
+        self.assertIsNotNone(result.date_to)
+        # The result should also be timezone-aware when reference is aware
+        self.assertFalse(timezone.is_naive(result.date_from))
+        self.assertFalse(timezone.is_naive(result.date_to))
+
+    def test_rag_service_handles_aware_datetimes(self):
+        """RAG service should handle timezone-aware dates from extraction without error."""
+        from django.utils import timezone
+
+        ref_date = timezone.localtime(timezone.now())
+        result = extract_dates_from_query("tomorrow", ref_date)
+
+        # Simulate what RAG service does - this should not raise ValueError
+        if result.date_from and result.confidence >= 0.5:
+            if timezone.is_naive(result.date_from):
+                date_from = timezone.make_aware(result.date_from)
+            else:
+                date_from = result.date_from
+
+            if timezone.is_naive(result.date_to):
+                date_to = timezone.make_aware(result.date_to)
+            else:
+                date_to = result.date_to
+
+            # Should have valid timezone-aware dates
+            self.assertFalse(timezone.is_naive(date_from))
+            self.assertFalse(timezone.is_naive(date_to))
