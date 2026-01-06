@@ -71,6 +71,7 @@ class ChatRequest(BaseModel):
     model_b: str | None = None
     single_model_mode: bool = True  # Default to single model mode
     preferred_model: str | None = None  # Which model to use in single mode
+    debug: bool = False  # Enable tracing for debugging (creates ChatDebugRun record)
 
 
 class StreamChunk(BaseModel):
@@ -311,6 +312,28 @@ async def stream_chat(
     # Save user message
     await save_message(session, 'user', request.message)
 
+    # Create debug trace if requested
+    trace = None
+    debug_run_id = None
+    if request.debug:
+        from traces.models import ChatDebugRun
+        from traces.recorder import TraceRecorder
+        from asgiref.sync import sync_to_async
+
+        # Create debug run record
+        debug_run = await sync_to_async(ChatDebugRun.objects.create)(
+            request_text=request.message,
+            settings={
+                'source': 'fastapi',
+                'context': request.context,
+                'session_id': request.session_id,
+            },
+            status='running',
+        )
+        debug_run_id = debug_run.id
+        trace = TraceRecorder(run_id=debug_run.id, persist=True)
+        logger.info(f"Debug mode enabled, trace ID: {debug_run.id}")
+
     async def generate_stream():
         full_response = ""  # Track full response for saving
         response_time_ms = None
@@ -333,7 +356,7 @@ async def stream_chat(
                 logger.warning("Ollama health check failed: %s", e)
 
             # Get relevant events for context (using frontend filters if provided)
-            relevant_events = await get_relevant_events(request.message, request.context)
+            relevant_events = await get_relevant_events(request.message, request.context, trace=trace)
 
             # Add conversation history to context for LLM prompt
             enhanced_context = {**request.context, 'chat_history': conversation_history}
@@ -434,16 +457,30 @@ async def stream_chat(
                     event_ids=[e['id'] for e in relevant_events[:5]] if relevant_events else None
                 )
 
-            # Send final completion marker with session_id
-            final_chunk = StreamChunk(
-                model="SYSTEM",
-                token="",
-                done=True,
-                session_id=session.id
-            )
-            yield f"data: {json.dumps(final_chunk.dict())}\n\n"
+            # Finalize debug trace if enabled
+            if trace:
+                from traces.diagnostics import compute_diagnostics
+                diagnostics = compute_diagnostics(trace.events)
+                trace.finalize(status='success', final_answer=full_response, diagnostics=diagnostics)
+                logger.info(f"Debug trace finalized: {debug_run_id}")
+
+            # Send final completion marker with session_id and debug_run_id
+            final_data = {
+                'model': 'SYSTEM',
+                'token': '',
+                'done': True,
+                'session_id': session.id,
+            }
+            if debug_run_id:
+                final_data['debug_run_id'] = str(debug_run_id)
+            yield f"data: {json.dumps(final_data)}\n\n"
 
         except Exception as e:
+            # Finalize debug trace with error
+            if trace:
+                import traceback
+                trace.finalize(status='error', error_message=str(e), error_stack=traceback.format_exc())
+
             error_chunk = StreamChunk(
                 model="SYSTEM",
                 token="",
@@ -560,13 +597,14 @@ async def stream_model_response(
 
 
 
-async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> List[Dict]:
+async def get_relevant_events(message: str, context: Dict[str, Any] = None, trace=None) -> List[Dict]:
     """
     Get relevant events for the message context using RAG.
 
     Args:
         message: User's search message
         context: Optional context with filters (location, date_range, is_virtual, user_location, etc.)
+        trace: Optional TraceRecorder for debugging
     """
     try:
         # Use RAG service for semantic search
@@ -626,6 +664,7 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
                 max_distance_miles=max_distance_miles,
                 user_lat=user_lat,
                 user_lng=user_lng,
+                trace=trace,
             )
 
         context_events = await loop.run_in_executor(None, run_rag_search)
