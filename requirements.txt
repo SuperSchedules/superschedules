@@ -25,3 +25,4 @@ celery[sqs]==5.4.0
 django-celery-beat==2.7.0
 django-celery-results==2.5.1
 dateparser>=1.2.0
+# Force rebuild 202601060105
