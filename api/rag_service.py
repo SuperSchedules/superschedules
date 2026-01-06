@@ -329,8 +329,15 @@ class EventRAGService:
                 from api.date_extraction import extract_dates_from_query
                 date_extraction_result = extract_dates_from_query(user_message, timezone.localtime(timezone.now()))
                 if date_extraction_result.date_from and date_extraction_result.confidence >= 0.5:
-                    date_from = timezone.make_aware(date_extraction_result.date_from)
-                    date_to = timezone.make_aware(date_extraction_result.date_to)
+                    # Handle both naive and aware datetimes from dateparser
+                    if timezone.is_naive(date_extraction_result.date_from):
+                        date_from = timezone.make_aware(date_extraction_result.date_from)
+                    else:
+                        date_from = date_extraction_result.date_from
+                    if timezone.is_naive(date_extraction_result.date_to):
+                        date_to = timezone.make_aware(date_extraction_result.date_to)
+                    else:
+                        date_to = date_extraction_result.date_to
                     # When we extract dates, don't use the default time_filter_days
                     time_filter_days = None
                     logger.info(
