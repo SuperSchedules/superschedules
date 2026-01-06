@@ -613,6 +613,7 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None) -> L
                 user_lng = user_location.get('lng')
 
         def run_rag_search():
+            logger.info(f"FastAPI RAG call: date_from={date_from}, date_to={date_to}, time_filter_days={time_filter_days}")
             return rag_service.get_context_events(
                 user_message=message,
                 max_events=20,
