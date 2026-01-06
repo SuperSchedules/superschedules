@@ -17,6 +17,7 @@ from django.db.models import Q
 from pgvector.django import CosineDistance
 
 from events.models import Event
+from api.date_extraction import extract_dates_from_query
 
 if TYPE_CHECKING:
     from traces.recorder import TraceRecorder
@@ -321,11 +322,32 @@ class EventRAGService:
             else:
                 location_query = location_hints[0] if location_hints else None
 
+            # Step 1b: Extract dates from natural language query (if no explicit dates provided)
+            date_extraction_result = None
+            if date_from is None and date_to is None:
+                date_extraction_result = extract_dates_from_query(user_message, timezone.localtime(timezone.now()))
+                if date_extraction_result.date_from and date_extraction_result.confidence >= 0.5:
+                    date_from = timezone.make_aware(date_extraction_result.date_from)
+                    date_to = timezone.make_aware(date_extraction_result.date_to)
+                    # When we extract dates, don't use the default time_filter_days
+                    time_filter_days = None
+                    logger.info(
+                        f"Date extracted from query: '{user_message[:50]}' -> "
+                        f"{date_from.strftime('%Y-%m-%d')} to {date_to.strftime('%Y-%m-%d')} "
+                        f"(phrases: {date_extraction_result.extracted_phrases}, confidence: {date_extraction_result.confidence})"
+                    )
+
             # Record input event with all filters
             if trace:
                 trace.event('input', {
                     'message': user_message,
                     'location_hints_extracted': location_hints,
+                    'date_extraction': {
+                        'extracted_phrases': date_extraction_result.extracted_phrases if date_extraction_result else [],
+                        'confidence': date_extraction_result.confidence if date_extraction_result else 0,
+                        'date_from': date_from.isoformat() if date_from else None,
+                        'date_to': date_to.isoformat() if date_to else None,
+                    } if date_extraction_result else None,
                     'filters': {
                         'max_events': max_events,
                         'similarity_threshold': similarity_threshold,
