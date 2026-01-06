@@ -325,9 +325,11 @@ class EventRAGService:
 
             # Step 1b: Extract dates from natural language query (if no explicit dates provided)
             date_extraction_result = None
+            logger.info(f"Date extraction check: date_from={date_from}, date_to={date_to}")
             if date_from is None and date_to is None:
                 from api.date_extraction import extract_dates_from_query
                 date_extraction_result = extract_dates_from_query(user_message, timezone.localtime(timezone.now()))
+                logger.info(f"Date extraction result: {date_extraction_result}")
                 if date_extraction_result.date_from and date_extraction_result.confidence >= 0.5:
                     # Handle both naive and aware datetimes from dateparser
                     if timezone.is_naive(date_extraction_result.date_from):
