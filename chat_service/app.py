@@ -23,7 +23,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ninja_jwt.tokens import AccessToken
 from ninja_jwt.exceptions import InvalidToken, TokenError
+from jwt.exceptions import ExpiredSignatureError
 from django.contrib.auth.models import User
+
+from .errors import ChatErrorCode, get_status_code
 
 from events.models import Event, ChatSession, ChatMessage
 from api.llm_service import get_llm_service, create_event_discovery_prompt
@@ -157,32 +160,44 @@ class JWTClaims(BaseModel):
 async def verify_jwt_token(request: Request) -> JWTClaims:
     """
     Verify JWT AccessToken from Authorization header.
-    
+
     Enforces:
-    - Token signature validation  
+    - Token signature validation
     - Token type (access token only)
     - Expiration (exp) and not-before (nbf) claims (handled by AccessToken)
     - Optional audience (aud) and issuer (iss) validation if configured
     - Returns parsed claims for downstream authorization
+
+    Error codes returned (for frontend handling):
+    - auth_required: No token provided
+    - token_expired: Token has expired (refresh and retry)
+    - token_invalid: Token is malformed or signature invalid
+    - auth_failed: User not found
     """
     from django.conf import settings
-    
+
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-    
+        raise HTTPException(
+            status_code=401,
+            detail={"message": "Missing authorization header", "error_code": ChatErrorCode.AUTH_REQUIRED}
+        )
+
     token_str = auth_header.split("Bearer ")[1]
     try:
         # Use AccessToken for proper validation (enforces exp/nbf/token_type automatically)
         access_token = AccessToken(token_str)
-        
+
         # Extract validated claims
         claims = access_token.payload
-        
+
         # Verify this is specifically an access token
         if claims.get('token_type') != 'access':
-            raise HTTPException(status_code=401, detail="Invalid token type")
-        
+            raise HTTPException(
+                status_code=401,
+                detail={"message": "Invalid token type", "error_code": ChatErrorCode.TOKEN_INVALID}
+            )
+
         # Optional: Validate audience (aud) if configured
         expected_audience = getattr(settings, 'JWT_EXPECTED_AUDIENCE', None)
         if expected_audience:
@@ -190,24 +205,34 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
             if not token_audience or expected_audience not in (
                 token_audience if isinstance(token_audience, list) else [token_audience]
             ):
-                raise HTTPException(status_code=401, detail="Invalid token audience")
-        
+                raise HTTPException(
+                    status_code=401,
+                    detail={"message": "Invalid token audience", "error_code": ChatErrorCode.TOKEN_INVALID}
+                )
+
         # Optional: Validate issuer (iss) if configured
         expected_issuer = getattr(settings, 'JWT_EXPECTED_ISSUER', None)
         if expected_issuer:
             token_issuer = claims.get('iss')
             if token_issuer != expected_issuer:
-                raise HTTPException(status_code=401, detail="Invalid token issuer")
-        
+                raise HTTPException(
+                    status_code=401,
+                    detail={"message": "Invalid token issuer", "error_code": ChatErrorCode.TOKEN_INVALID}
+                )
+
         # Get user for authorization (optional, depending on needs)
         user = None
         try:
             from asgiref.sync import sync_to_async
             user = await sync_to_async(User.objects.get)(id=claims['user_id'])
         except User.DoesNotExist:
-            # Log warning but don't fail - user might have been deleted
+            # User was deleted - this is an auth failure
             logger.warning("User %d not found for valid JWT token", claims['user_id'])
-        
+            raise HTTPException(
+                status_code=401,
+                detail={"message": "User not found", "error_code": ChatErrorCode.AUTH_FAILED}
+            )
+
         return JWTClaims(
             user_id=claims['user_id'],
             username=claims.get('username', ''),
@@ -216,11 +241,22 @@ async def verify_jwt_token(request: Request) -> JWTClaims:
             token_type=claims['token_type'],
             user=user
         )
-        
+
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401,
+            detail={"message": "Token has expired", "error_code": ChatErrorCode.TOKEN_EXPIRED}
+        )
     except (InvalidToken, TokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+        raise HTTPException(
+            status_code=401,
+            detail={"message": f"Invalid token: {str(e)}", "error_code": ChatErrorCode.TOKEN_INVALID}
+        )
     except KeyError as e:
-        raise HTTPException(status_code=401, detail=f"Missing required claim: {str(e)}")
+        raise HTTPException(
+            status_code=401,
+            detail={"message": f"Missing required claim: {str(e)}", "error_code": ChatErrorCode.TOKEN_INVALID}
+        )
 
 
 # =============================================================================
@@ -263,6 +299,20 @@ def save_message(session: ChatSession, role: str, content: str, metadata: dict =
         session.save(update_fields=['title', 'updated_at'])
 
     return msg
+
+
+@app.get("/api/v1/chat/ping")
+async def ping():
+    """
+    Lightweight heartbeat endpoint.
+
+    Use this to check if the service is responsive without the overhead
+    of full health checks. Useful for keepalive checks from the frontend.
+    """
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/api/v1/chat/health")
