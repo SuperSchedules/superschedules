@@ -5,7 +5,7 @@ Venue admin configuration with Grappelli styling.
 from django.contrib import admin
 from django.db.models import Count
 
-from venues.models import Venue
+from venues.models import Venue, VenueHours
 from venues.geocoding import geocode_venue
 from venues.extraction import _clean_street_address
 
@@ -81,26 +81,52 @@ def cleanup_addresses(modeladmin, request, queryset):
 cleanup_addresses.short_description = "Clean up addresses (remove duplicated city/state/zip)"
 
 
+class VenueHoursInline(admin.TabularInline):
+    """Inline display of venue hours."""
+    model = VenueHours
+    extra = 0
+    fields = ['day_of_week', 'open_time', 'close_time', 'is_closed', 'notes']
+    ordering = ['day_of_week']
+
+
 @admin.register(Venue)
 class VenueAdmin(admin.ModelAdmin):
     """Admin interface for Venue management."""
 
-    list_display = ['id', 'name', 'city', 'state', 'postal_code', 'latitude', 'longitude', 'event_count', 'source_domain', 'created_at']
-    list_filter = ['state', 'city', 'created_at']
+    list_display = [
+        'id', 'name', 'venue_kind', 'venue_name_quality', 'city', 'state',
+        'audience_primary', 'enrichment_status', 'event_count', 'created_at'
+    ]
+    list_filter = ['venue_kind', 'venue_name_quality', 'audience_primary', 'enrichment_status', 'state', 'city']
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain']
-    readonly_fields = ['slug', 'created_at', 'updated_at']
+    readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at']
     ordering = ['-created_at']
     actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses]
+    inlines = [VenueHoursInline]
 
     fieldsets = (
         ('Venue Identity', {
-            'fields': ('name', 'slug', 'canonical_url')
+            'fields': ('name', 'slug', 'website_url', 'canonical_url')
+        }),
+        ('Classification', {
+            'fields': ('venue_kind', 'venue_kind_confidence', 'venue_name_quality'),
         }),
         ('Address', {
             'fields': ('street_address', 'city', 'state', 'postal_code', 'country')
         }),
         ('Geocoding', {
             'fields': ('latitude', 'longitude'),
+            'classes': ('collapse',)
+        }),
+        ('Audience', {
+            'fields': ('audience_age_groups', 'audience_tags', 'audience_min_age', 'audience_primary'),
+        }),
+        ('Content', {
+            'fields': ('description', 'kids_summary'),
+            'classes': ('collapse',)
+        }),
+        ('Enrichment Metadata', {
+            'fields': ('enrichment_status', 'last_enriched_at', 'website_url_confidence'),
             'classes': ('collapse',)
         }),
         ('Source Tracking', {
@@ -123,3 +149,12 @@ class VenueAdmin(admin.ModelAdmin):
         return getattr(obj, '_event_count', obj.events.count())
     event_count.short_description = 'Events'
     event_count.admin_order_field = '_event_count'
+
+
+@admin.register(VenueHours)
+class VenueHoursAdmin(admin.ModelAdmin):
+    """Admin for viewing/managing venue hours."""
+    list_display = ['venue', 'day_of_week', 'open_time', 'close_time', 'is_closed']
+    list_filter = ['day_of_week', 'is_closed']
+    search_fields = ['venue__name']
+    ordering = ['venue', 'day_of_week']

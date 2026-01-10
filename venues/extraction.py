@@ -167,7 +167,7 @@ def _clean_street_address(street_address: str, city: str, state: str, postal_cod
 
 
 def _normalize_from_location_data(location_data: dict) -> dict:
-    """Convert collector's location_data to normalized format."""
+    """Convert collector's location_data to normalized format, including enrichment fields."""
     city = location_data.get("city", "")
     state = _normalize_state(location_data.get("state", ""))
     postal_code = location_data.get("postal_code", "")
@@ -180,7 +180,7 @@ def _normalize_from_location_data(location_data: dict) -> dict:
     if not postal_code and extracted_postal:
         postal_code = extracted_postal
 
-    return {
+    result = {
         "venue_name": location_data.get("venue_name", ""),
         "room_name": location_data.get("room_name", ""),
         "street_address": cleaned_street,
@@ -191,6 +191,18 @@ def _normalize_from_location_data(location_data: dict) -> dict:
         "latitude": location_data.get("latitude"),
         "longitude": location_data.get("longitude"),
     }
+
+    # Include enrichment fields if present (from collector's venue enrichment)
+    enrichment_fields = [
+        "venue_kind", "venue_kind_confidence", "venue_name_quality",
+        "audience_age_groups", "audience_tags", "audience_min_age", "audience_primary",
+        "venue_website_url", "venue_description", "venue_kids_summary", "venue_hours_available"
+    ]
+    for field in enrichment_fields:
+        if field in location_data and location_data[field] is not None:
+            result[field] = location_data[field]
+
+    return result
 
 
 def _has_required_fields(result: dict) -> bool:
@@ -454,14 +466,17 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
     """
     Get existing venue or create new one based on deduplication key.
 
+    Also applies enrichment fields if provided and confidence is higher than existing.
+
     Args:
-        normalized: Normalized venue data dict
+        normalized: Normalized venue data dict (may include enrichment fields)
         source_domain: Domain where venue was discovered
 
     Returns:
         Tuple of (Venue instance or None, created boolean)
     """
     from django.db import IntegrityError
+    from django.utils import timezone
 
     if not normalized or not normalized.get("venue_name") or not normalized.get("city"):
         return None, False
@@ -488,13 +503,25 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
             postal_code=postal_code
         )
         # Update coordinates if venue is missing them but collector provided them
+        update_fields = []
         if venue.latitude is None and normalized.get("latitude"):
             venue.latitude = _to_decimal(normalized.get("latitude"))
             venue.longitude = _to_decimal(normalized.get("longitude"))
-            venue.save(update_fields=["latitude", "longitude"])
+            update_fields.extend(["latitude", "longitude"])
+
+        # Apply enrichment if provided
+        enrichment_updates = _apply_enrichment_fields(venue, normalized)
+        update_fields.extend(enrichment_updates)
+
+        if update_fields:
+            venue.save(update_fields=update_fields)
+
         return venue, False
     except Venue.DoesNotExist:
         pass
+
+    # Prepare enrichment fields for new venue
+    enrichment_kwargs = _get_enrichment_kwargs(normalized)
 
     # Create new venue, handling race condition with IntegrityError
     try:
@@ -510,6 +537,7 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
             longitude=_to_decimal(normalized.get("longitude")),
             source_domain=source_domain_truncated,
             raw_schema=normalized.get("raw_schema"),
+            **enrichment_kwargs
         )
         return venue, True
     except IntegrityError:
@@ -521,6 +549,107 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
             postal_code=postal_code
         )
         return venue, False
+
+
+def _apply_enrichment_fields(venue: Venue, normalized: dict) -> list[str]:
+    """
+    Apply enrichment fields to an existing venue if confidence is higher.
+
+    Returns list of field names that were updated.
+    """
+    from django.utils import timezone
+
+    updated_fields = []
+    new_confidence = normalized.get("venue_kind_confidence", 0) or 0
+    existing_confidence = venue.venue_kind_confidence or 0
+
+    # Only apply enrichment if collector's confidence is higher or venue has no enrichment
+    if new_confidence > existing_confidence or venue.enrichment_status == "none":
+        # Classification fields
+        if normalized.get("venue_kind"):
+            venue.venue_kind = normalized["venue_kind"]
+            updated_fields.append("venue_kind")
+        if normalized.get("venue_kind_confidence"):
+            venue.venue_kind_confidence = normalized["venue_kind_confidence"]
+            updated_fields.append("venue_kind_confidence")
+        if normalized.get("venue_name_quality"):
+            venue.venue_name_quality = normalized["venue_name_quality"]
+            updated_fields.append("venue_name_quality")
+
+        # Audience fields
+        if normalized.get("audience_age_groups"):
+            venue.audience_age_groups = normalized["audience_age_groups"]
+            updated_fields.append("audience_age_groups")
+        if normalized.get("audience_tags"):
+            venue.audience_tags = normalized["audience_tags"]
+            updated_fields.append("audience_tags")
+        if normalized.get("audience_min_age") is not None:
+            venue.audience_min_age = normalized["audience_min_age"]
+            updated_fields.append("audience_min_age")
+        if normalized.get("audience_primary"):
+            venue.audience_primary = normalized["audience_primary"]
+            updated_fields.append("audience_primary")
+
+        # Content fields
+        if normalized.get("venue_website_url"):
+            venue.website_url = normalized["venue_website_url"]
+            updated_fields.append("website_url")
+        if normalized.get("venue_description"):
+            venue.description = normalized["venue_description"]
+            updated_fields.append("description")
+        if normalized.get("venue_kids_summary"):
+            venue.kids_summary = normalized["venue_kids_summary"]
+            updated_fields.append("kids_summary")
+
+        # Update enrichment status
+        if updated_fields:
+            venue.enrichment_status = "partial" if len(updated_fields) < 5 else "complete"
+            venue.last_enriched_at = timezone.now()
+            updated_fields.extend(["enrichment_status", "last_enriched_at"])
+
+    return updated_fields
+
+
+def _get_enrichment_kwargs(normalized: dict) -> dict:
+    """
+    Extract enrichment fields from normalized data for venue creation.
+    """
+    from django.utils import timezone
+
+    kwargs = {}
+
+    # Classification fields
+    if normalized.get("venue_kind"):
+        kwargs["venue_kind"] = normalized["venue_kind"]
+    if normalized.get("venue_kind_confidence"):
+        kwargs["venue_kind_confidence"] = normalized["venue_kind_confidence"]
+    if normalized.get("venue_name_quality"):
+        kwargs["venue_name_quality"] = normalized["venue_name_quality"]
+
+    # Audience fields
+    if normalized.get("audience_age_groups"):
+        kwargs["audience_age_groups"] = normalized["audience_age_groups"]
+    if normalized.get("audience_tags"):
+        kwargs["audience_tags"] = normalized["audience_tags"]
+    if normalized.get("audience_min_age") is not None:
+        kwargs["audience_min_age"] = normalized["audience_min_age"]
+    if normalized.get("audience_primary"):
+        kwargs["audience_primary"] = normalized["audience_primary"]
+
+    # Content fields
+    if normalized.get("venue_website_url"):
+        kwargs["website_url"] = normalized["venue_website_url"]
+    if normalized.get("venue_description"):
+        kwargs["description"] = normalized["venue_description"]
+    if normalized.get("venue_kids_summary"):
+        kwargs["kids_summary"] = normalized["venue_kids_summary"]
+
+    # Set enrichment status if any enrichment fields present
+    if kwargs:
+        kwargs["enrichment_status"] = "partial" if len(kwargs) < 5 else "complete"
+        kwargs["last_enriched_at"] = timezone.now()
+
+    return kwargs
 
 
 def _to_decimal(value) -> Optional[Decimal]:
