@@ -1,0 +1,5 @@
+# Minimal dependencies for embedding microservice
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+sentence-transformers>=2.2.0
+pydantic>=2.0.0

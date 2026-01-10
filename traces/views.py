@@ -219,21 +219,56 @@ def run_debug_pipeline(message: str, settings: dict, recorder: TraceRecorder) ->
             except (ValueError, TypeError):
                 pass
 
-        context_events = rag_service.get_context_events(
-            user_message=message,
-            max_events=settings.get('max_events', 20),
-            similarity_threshold=settings.get('similarity_threshold', 0.2),
-            time_filter_days=settings.get('time_filter_days', 14),
-            date_from=date_from,
-            date_to=date_to,
-            location=settings.get('location'),
-            is_virtual=settings.get('is_virtual'),
-            max_distance_miles=settings.get('max_distance_miles'),
-            user_lat=settings.get('user_lat'),
-            user_lng=settings.get('user_lng'),
-            default_state=settings.get('default_state', 'MA'),
-            trace=recorder,
-        )
+        # Check if using new tiered retrieval with custom scoring weights
+        scoring_weights = settings.get('scoring_weights')
+        use_tiered = scoring_weights is not None or settings.get('max_recommended') is not None
+
+        if use_tiered:
+            # Use new tiered retrieval with multi-factor scoring
+            from api.rag_service import ScoringWeights
+
+            weights = None
+            if scoring_weights:
+                weights = ScoringWeights.from_dict(scoring_weights)
+
+            rag_result = rag_service.get_context_events_tiered(
+                user_message=message,
+                max_recommended=settings.get('max_recommended', 10),
+                max_additional=settings.get('max_additional', 15),
+                max_context=settings.get('max_context', 50),
+                similarity_threshold=settings.get('similarity_threshold', 0.15),
+                scoring_weights=weights,
+                location_id=settings.get('location_id'),
+                location=settings.get('location'),
+                max_distance_miles=settings.get('max_distance_miles'),
+                user_lat=settings.get('user_lat'),
+                user_lng=settings.get('user_lng'),
+                default_state=settings.get('default_state', 'MA'),
+                time_filter_days=settings.get('time_filter_days', 14),
+                date_from=date_from,
+                date_to=date_to,
+                is_virtual=settings.get('is_virtual'),
+                trace=recorder,
+            )
+            # Convert to legacy format for LLM - use recommended + additional events
+            context_events = rag_result.to_legacy_format()
+        else:
+            # Legacy retrieval
+            context_events = rag_service.get_context_events(
+                user_message=message,
+                max_events=settings.get('max_events', 20),
+                similarity_threshold=settings.get('similarity_threshold', 0.2),
+                time_filter_days=settings.get('time_filter_days', 14),
+                date_from=date_from,
+                date_to=date_to,
+                location=settings.get('location'),
+                is_virtual=settings.get('is_virtual'),
+                max_distance_miles=settings.get('max_distance_miles'),
+                user_lat=settings.get('user_lat'),
+                user_lng=settings.get('user_lng'),
+                default_state=settings.get('default_state', 'MA'),
+                trace=recorder,
+            )
 
         # 2. Prompt assembly
         current_datetime = timezone.localtime(timezone.now())

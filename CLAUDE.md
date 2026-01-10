@@ -106,6 +106,41 @@ def create_event(event_data: dict, api_client: ApiClient) -> Event:
 - Keep views thin; place LLM/RAG logic in `api/` services
 - Avoid circular imports
 
+### Django ORM in Async Contexts (FastAPI)
+**CRITICAL:** When calling Django ORM from FastAPI async code (generators, coroutines), you MUST wrap synchronous database calls in `sync_to_async`. Otherwise, database operations may silently fail due to transaction isolation issues.
+
+**Problem:**
+```python
+# BAD - This will silently fail or have transaction issues
+async def my_async_function():
+    MyModel.objects.create(...)  # Sync ORM in async context
+    MyModel.objects.filter(...).update(...)  # Also broken
+```
+
+**Solution:**
+```python
+from asgiref.sync import sync_to_async
+
+# GOOD - Wrap in sync_to_async
+async def my_async_function():
+    @sync_to_async
+    def do_db_work():
+        return MyModel.objects.create(...)
+
+    result = await do_db_work()
+```
+
+**Real example from this codebase:** The `TraceRecorder` class provides both sync and async methods:
+- `trace.event()` - Use from sync code (Django views, management commands)
+- `trace.event_async()` - Use from async code (FastAPI endpoints, async generators)
+- `trace.finalize()` vs `trace.finalize_async()` - Same pattern
+
+This applies to ALL Django ORM operations in FastAPI code, including:
+- Model.objects.create/update/delete
+- Model.objects.filter().update()
+- QuerySet operations
+- Any code that touches the database
+
 ### Commit Conventions
 Use Conventional Commits format:
 - `feat:` New features
@@ -207,14 +242,61 @@ python manage.py import_locations --source=census --state=MA
 python manage.py import_locations --dry-run --limit=100
 ```
 
-### 3. LLM Integration
+### 3. Enhanced RAG with Tiered Retrieval (NEW)
+**Location:** `api/rag_service.py`
+
+The RAG service now supports tiered retrieval with multi-factor scoring:
+
+**Scoring Factors:**
+- `semantic_similarity` (default 0.40) - Embedding cosine similarity
+- `location_match` (default 0.25) - Distance-based scoring (closer = higher)
+- `time_relevance` (default 0.20) - Sooner events score higher
+- `category_match` (default 0.10) - Tag/audience overlap with query
+- `popularity` (default 0.05) - Source quality signals
+
+**Tiered Results:**
+- `recommended`: Top 5-10 events for LLM context (high confidence)
+- `additional`: Next 10-20 events for secondary display
+- `context`: Up to 50 more events for map display
+
+**Usage:**
+```python
+from api.rag_service import get_rag_service, ScoringWeights
+
+rag = get_rag_service()
+
+# Custom weights emphasizing location
+weights = ScoringWeights(
+    semantic_similarity=0.3,
+    location_match=0.4,  # More weight on location
+    time_relevance=0.2,
+    category_match=0.05,
+    popularity=0.05,
+)
+
+result = rag.get_context_events_tiered(
+    user_message="activities for kids",
+    location_id=123,  # Location table ID (preferred)
+    scoring_weights=weights,
+    max_recommended=10,
+    max_additional=15,
+    max_context=50,
+)
+
+# Access tiered results
+for event in result.recommended_events:
+    print(f"{event.tier}: {event.event_data['title']} (score: {event.final_score:.2f})")
+    print(f"  Factors: {event.ranking_factors.to_dict()}")
+```
+
+### 4. LLM Integration
 **Location:** `api/llm_service.py`
 - Ollama integration with Deepseek model
 - Streaming responses via FastAPI SSE
 - Context-aware prompts with RAG results
 - Fallback model support (llama3.2:3b)
 
-### 4. Event Collection Pipeline
+### 5. Event Collection Pipeline
 **Flow:** Navigator → Collector → Django API
 1. **Navigator** scans sites to find event pages
 2. **Collector** (port 8001) extracts events:
@@ -226,7 +308,7 @@ python manage.py import_locations --dry-run --limit=100
    - Automatic embedding generation
    - Site strategy tracking
 
-### 5. Chat Service (FastAPI)
+### 6. Chat Service (FastAPI)
 **Location:** `chat_service/app.py` (Port 8002)
 - Server-Sent Events (SSE) for streaming
 - JWT authentication (shared with Django)

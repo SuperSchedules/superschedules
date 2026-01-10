@@ -198,6 +198,76 @@
             </div>
         </div>
 
+        <!-- Scoring Weights Section (Collapsible) -->
+        <details id="scoring-weights-section" style="margin-top: 15px; margin-bottom: 15px;">
+            <summary style="cursor: pointer; font-weight: bold; color: #417690; padding: 8px 0;">
+                Scoring Weights (Advanced)
+            </summary>
+            <div style="padding: 15px; background: #fff; border: 1px solid #dee2e6; border-radius: 4px; margin-top: 10px;">
+                <p style="font-size: 12px; color: #666; margin-top: 0;">
+                    Adjust how events are scored. Weights should sum to 1.0 for best results.
+                </p>
+                <div class="form-row">
+                    <div>
+                        <label for="weight_semantic">Semantic Match:</label>
+                        <input type="range" id="weight_semantic" name="weight_semantic" min="0" max="100" value="40" oninput="updateWeightDisplay()">
+                        <span id="weight_semantic_val" style="font-size: 12px;">0.40</span>
+                    </div>
+                    <div>
+                        <label for="weight_location">Location Match:</label>
+                        <input type="range" id="weight_location" name="weight_location" min="0" max="100" value="25" oninput="updateWeightDisplay()">
+                        <span id="weight_location_val" style="font-size: 12px;">0.25</span>
+                    </div>
+                    <div>
+                        <label for="weight_time">Time Relevance:</label>
+                        <input type="range" id="weight_time" name="weight_time" min="0" max="100" value="20" oninput="updateWeightDisplay()">
+                        <span id="weight_time_val" style="font-size: 12px;">0.20</span>
+                    </div>
+                    <div>
+                        <label for="weight_category">Category Match:</label>
+                        <input type="range" id="weight_category" name="weight_category" min="0" max="100" value="10" oninput="updateWeightDisplay()">
+                        <span id="weight_category_val" style="font-size: 12px;">0.10</span>
+                    </div>
+                    <div>
+                        <label for="weight_popularity">Popularity:</label>
+                        <input type="range" id="weight_popularity" name="weight_popularity" min="0" max="100" value="5" oninput="updateWeightDisplay()">
+                        <span id="weight_popularity_val" style="font-size: 12px;">0.05</span>
+                    </div>
+                </div>
+                <div id="weight-total" style="margin-top: 10px; font-size: 13px;">
+                    Total: <strong>1.00</strong>
+                </div>
+            </div>
+        </details>
+
+        <!-- Tier Configuration -->
+        <div class="form-row" style="margin-bottom: 15px;">
+            <div>
+                <label for="max_recommended">Max Recommended:</label>
+                <select id="max_recommended" name="max_recommended">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="15">15</option>
+                </select>
+            </div>
+            <div>
+                <label for="max_additional">Max Additional:</label>
+                <select id="max_additional" name="max_additional">
+                    <option value="10">10</option>
+                    <option value="15" selected>15</option>
+                    <option value="25">25</option>
+                </select>
+            </div>
+            <div>
+                <label for="max_context">Max Context:</label>
+                <select id="max_context" name="max_context">
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                </select>
+            </div>
+        </div>
+
         <input type="submit" value="Run Debug Chat" id="submit-btn">
     </form>
 
@@ -235,15 +305,24 @@
                     <thead>
                         <tr>
                             <th style="width:50px;">#</th>
-                            <th style="width:80px;">Score</th>
+                            <th style="width:80px;">Tier</th>
+                            <th style="width:80px;">Final</th>
                             <th style="width:200px;">Title</th>
                             <th style="width:120px;">Venue/City</th>
                             <th style="width:150px;">Date/Time</th>
-                            <th>Context Snippet (what LLM sees)</th>
+                            <th style="width:120px;">Factors</th>
+                            <th>Admin</th>
                         </tr>
                     </thead>
                     <tbody id="retrieval-body"></tbody>
                 </table>
+            </div>
+            <!-- Legend for tiers -->
+            <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 12px;">
+                <strong>Tier Legend:</strong>
+                <span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 3px; margin-left: 10px;">Recommended</span>
+                <span style="background: #17a2b8; color: white; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Additional</span>
+                <span style="background: #6c757d; color: white; padding: 2px 8px; border-radius: 3px; margin-left: 5px;">Context</span>
             </div>
         </div>
 
@@ -302,6 +381,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let currentRunId = null;
     let recentRuns = [];  // Cache of runs from API
+
+    // ===== SCORING WEIGHTS DISPLAY =====
+
+    window.updateWeightDisplay = function() {
+        const semantic = parseInt(document.getElementById('weight_semantic').value);
+        const location = parseInt(document.getElementById('weight_location').value);
+        const time = parseInt(document.getElementById('weight_time').value);
+        const category = parseInt(document.getElementById('weight_category').value);
+        const popularity = parseInt(document.getElementById('weight_popularity').value);
+
+        document.getElementById('weight_semantic_val').textContent = (semantic / 100).toFixed(2);
+        document.getElementById('weight_location_val').textContent = (location / 100).toFixed(2);
+        document.getElementById('weight_time_val').textContent = (time / 100).toFixed(2);
+        document.getElementById('weight_category_val').textContent = (category / 100).toFixed(2);
+        document.getElementById('weight_popularity_val').textContent = (popularity / 100).toFixed(2);
+
+        const total = (semantic + location + time + category + popularity) / 100;
+        const totalEl = document.getElementById('weight-total');
+        totalEl.innerHTML = `Total: <strong style="color:${Math.abs(total - 1.0) < 0.01 ? '#28a745' : '#dc3545'}">${total.toFixed(2)}</strong>`;
+    };
+
+    // Initialize weight display
+    updateWeightDisplay();
 
     // ===== SIDEBAR: Previous Runs =====
 
@@ -475,6 +577,18 @@ document.addEventListener('DOMContentLoaded', function() {
             similarity_threshold: parseFloat(document.getElementById('similarity_threshold').value),
             time_filter_days: parseInt(document.getElementById('time_filter_days').value),
             use_tools: document.getElementById('use_tools').checked,
+            // Tier configuration
+            max_recommended: parseInt(document.getElementById('max_recommended').value),
+            max_additional: parseInt(document.getElementById('max_additional').value),
+            max_context: parseInt(document.getElementById('max_context').value),
+            // Scoring weights
+            scoring_weights: {
+                semantic_similarity: parseInt(document.getElementById('weight_semantic').value) / 100,
+                location_match: parseInt(document.getElementById('weight_location').value) / 100,
+                time_relevance: parseInt(document.getElementById('weight_time').value) / 100,
+                category_match: parseInt(document.getElementById('weight_category').value) / 100,
+                popularity: parseInt(document.getElementById('weight_popularity').value) / 100,
+            },
         };
 
         const location = document.getElementById('location').value.trim();
@@ -610,7 +724,18 @@ document.addEventListener('DOMContentLoaded', function() {
         const candidates = data.candidates || [];
         const threshold = data.threshold || 0.2;
 
-        // Summary
+        // Summary with tier info if available
+        const tiers = data.tiers || {};
+        const tierSummary = tiers.recommended !== undefined
+            ? `<br><strong>Tiers:</strong> ${tiers.recommended || 0} recommended, ${tiers.additional || 0} additional, ${tiers.context || 0} context`
+            : '';
+
+        // Weights summary if available
+        const weights = data.weights || {};
+        const weightsSummary = weights.semantic_similarity !== undefined
+            ? `<br><strong>Weights:</strong> Semantic=${weights.semantic_similarity}, Location=${weights.location_match}, Time=${weights.time_relevance}, Category=${weights.category_match}, Popularity=${weights.popularity}`
+            : '';
+
         summary.innerHTML = `
             <strong>Query:</strong> "${data.query_text || ''}"<br>
             <strong>Found:</strong> ${data.total_candidates || 0} candidates,
@@ -619,25 +744,54 @@ document.addEventListener('DOMContentLoaded', function() {
             Geo: ${data.geo_filter_used ? 'Yes' : 'No'},
             Text: ${data.text_filter_used ? 'Yes' : 'No'}
             ${retrievalEvent.latency_ms ? ` | <strong>Time:</strong> ${retrievalEvent.latency_ms}ms` : ''}
+            ${tierSummary}
+            ${weightsSummary}
         `;
 
         // Table
         tbody.innerHTML = '';
 
         candidates.forEach((c, i) => {
-            const score = c.similarity_score || 0;
+            // Use final_score if available (tiered), otherwise similarity_score
+            const score = c.final_score || c.similarity_score || 0;
             const scoreClass = score >= 0.5 ? 'high' : score >= 0.35 ? 'medium' : 'low';
-            const rowClass = c.above_threshold ? 'above' : 'below';
 
+            // Tier badge color
+            const tier = c.tier || 'unknown';
+            const tierBadge = tier === 'recommended' ? '<span style="background:#28a745;color:white;padding:2px 6px;border-radius:3px;font-size:11px;">Rec</span>'
+                : tier === 'additional' ? '<span style="background:#17a2b8;color:white;padding:2px 6px;border-radius:3px;font-size:11px;">Add</span>'
+                : tier === 'context' ? '<span style="background:#6c757d;color:white;padding:2px 6px;border-radius:3px;font-size:11px;">Ctx</span>'
+                : '<span style="background:#ffc107;color:black;padding:2px 6px;border-radius:3px;font-size:11px;">?</span>';
+
+            // Format factors as compact display
+            const factors = c.factors || {};
+            let factorsHtml = '';
+            if (factors.semantic_similarity !== undefined) {
+                factorsHtml = `
+                    <span title="Semantic" style="font-size:10px;">S:${(factors.semantic_similarity || 0).toFixed(2)}</span>
+                    <span title="Location" style="font-size:10px;">L:${(factors.location_match || 0).toFixed(2)}</span>
+                    <span title="Time" style="font-size:10px;">T:${(factors.time_relevance || 0).toFixed(2)}</span>
+                `;
+                if (factors.distance_miles !== null && factors.distance_miles !== undefined) {
+                    factorsHtml += `<br><span style="font-size:10px;color:#666;">${factors.distance_miles}mi</span>`;
+                }
+            } else {
+                // Legacy format
+                factorsHtml = `<span style="font-size:10px;">sim:${(c.similarity_score || 0).toFixed(3)}</span>`;
+            }
+
+            const rowClass = c.above_threshold !== false ? '' : 'below';
             const row = document.createElement('tr');
             row.className = rowClass;
             row.innerHTML = `
                 <td>${i + 1}</td>
+                <td>${tierBadge}</td>
                 <td class="score ${scoreClass}">${score.toFixed(3)}</td>
                 <td><strong>${escapeHtml(c.title || 'Untitled')}</strong></td>
                 <td>${escapeHtml(c.venue || '')}${c.city ? ', ' + escapeHtml(c.city) : ''}</td>
                 <td>${c.start_time ? formatDateTime(c.start_time) : '-'}</td>
-                <td class="snippet">${escapeHtml(c.context_snippet || '')}</td>
+                <td>${factorsHtml}</td>
+                <td><a href="/admin/events/event/${c.id}/change/" target="_blank" style="font-size:11px;">Edit</a></td>
             `;
             tbody.appendChild(row);
         });

@@ -1,11 +1,19 @@
 """
 RAG (Retrieval-Augmented Generation) service for semantic event search.
 Uses sentence transformers for embeddings and cosine similarity for retrieval.
+
+Supports:
+- Tiered event retrieval (recommended vs additional)
+- Configurable scoring weights for ranking factors
+- Location ID-based filtering (deterministic, no string matching)
+- Multi-factor ranking with transparent scoring breakdown
 """
 
 import json
 import logging
 import html
+import math
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 
@@ -16,13 +24,123 @@ from django.db.models import Q
 from pgvector.django import CosineDistance
 
 from events.models import Event
-# NOTE: sentence_transformers and dateparser are lazy-imported to reduce startup memory
-# See _load_model() and get_context_events() for the lazy imports
+from api.embedding_client import get_embedding_client, EmbeddingClient
 
 if TYPE_CHECKING:
     from traces.recorder import TraceRecorder
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Scoring Configuration
+# =============================================================================
+
+@dataclass
+class ScoringWeights:
+    """
+    Configurable weights for multi-factor event scoring.
+
+    All weights are 0-1 and get combined into a weighted final score.
+    Default weights emphasize semantic match but give meaningful boost to
+    location and time factors.
+    """
+    semantic_similarity: float = 0.4   # Weight for embedding similarity (default dominant factor)
+    location_match: float = 0.25       # Weight for distance-based location score
+    time_relevance: float = 0.20       # Weight for how soon the event is
+    category_match: float = 0.10       # Weight for tag/audience alignment
+    popularity: float = 0.05           # Weight for source quality/popularity
+
+    def __post_init__(self):
+        """Validate weights sum to ~1.0"""
+        total = self.semantic_similarity + self.location_match + self.time_relevance + self.category_match + self.popularity
+        if abs(total - 1.0) > 0.01:
+            logger.warning(f"Scoring weights sum to {total:.2f}, not 1.0. Scores may be unexpected.")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, float]) -> 'ScoringWeights':
+        """Create from dictionary, using defaults for missing keys."""
+        return cls(
+            semantic_similarity=d.get('semantic_similarity', 0.4),
+            location_match=d.get('location_match', 0.25),
+            time_relevance=d.get('time_relevance', 0.20),
+            category_match=d.get('category_match', 0.10),
+            popularity=d.get('popularity', 0.05),
+        )
+
+
+@dataclass
+class RankingFactors:
+    """Breakdown of scoring factors for a single event."""
+    semantic_similarity: float = 0.0
+    location_match: float = 0.0
+    time_relevance: float = 0.0
+    category_match: float = 0.0
+    popularity: float = 0.0
+    distance_miles: Optional[float] = None  # Actual distance if location used
+    days_until_event: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'semantic_similarity': round(self.semantic_similarity, 3),
+            'location_match': round(self.location_match, 3),
+            'time_relevance': round(self.time_relevance, 3),
+            'category_match': round(self.category_match, 3),
+            'popularity': round(self.popularity, 3),
+            'distance_miles': round(self.distance_miles, 1) if self.distance_miles is not None else None,
+            'days_until_event': round(self.days_until_event, 1) if self.days_until_event is not None else None,
+        }
+
+
+@dataclass
+class RankedEvent:
+    """An event with its scoring breakdown and tier assignment."""
+    event_data: Dict[str, Any]
+    final_score: float
+    ranking_factors: RankingFactors
+    tier: str  # 'recommended', 'additional', or 'context'
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            **self.event_data,
+            'final_score': round(self.final_score, 3),
+            'ranking_factors': self.ranking_factors.to_dict(),
+            'tier': self.tier,
+        }
+
+
+@dataclass
+class RAGResult:
+    """
+    Complete result from tiered RAG retrieval.
+
+    Events are split into tiers for different use cases:
+    - recommended: Top events to show prominently and pass to LLM (5-10)
+    - additional: Good matches shown in secondary list (10-20)
+    - context: All other matches for map display (up to 50)
+    """
+    recommended_events: List[RankedEvent] = field(default_factory=list)
+    additional_events: List[RankedEvent] = field(default_factory=list)
+    context_events: List[RankedEvent] = field(default_factory=list)
+    total_considered: int = 0
+    search_metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def all_events(self) -> List[RankedEvent]:
+        """All events across all tiers, ordered by score."""
+        return self.recommended_events + self.additional_events + self.context_events
+
+    @property
+    def recommended_ids(self) -> List[int]:
+        return [e.event_data['id'] for e in self.recommended_events]
+
+    @property
+    def all_ids(self) -> List[int]:
+        return [e.event_data['id'] for e in self.all_events]
+
+    def to_legacy_format(self) -> List[Dict[str, Any]]:
+        """Convert to legacy format for backward compatibility with existing code."""
+        return [e.event_data for e in self.recommended_events + self.additional_events]
 
 
 def clean_html_content(content: str) -> str:
@@ -46,19 +164,39 @@ def clean_html_content(content: str) -> str:
 
 class EventRAGService:
     """RAG service for semantic event search using sentence transformers and PostgreSQL."""
-    
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        """Initialize with a compact, fast sentence transformer model."""
-        self.model_name = model_name
-        self.model = None
-        # Model is lazy-loaded on first use to avoid OOM at startup
-    
-    def _load_model(self):
-        """Lazy load the sentence transformer model."""
-        if self.model is None:
-            from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading sentence transformer model: {self.model_name}")
-            self.model = SentenceTransformer(self.model_name)
+
+    def __init__(self, embedding_client: Optional[EmbeddingClient] = None):
+        """
+        Initialize the RAG service.
+
+        Args:
+            embedding_client: Optional EmbeddingClient instance. If not provided,
+                              uses the global client from get_embedding_client().
+        """
+        self._embedding_client = embedding_client
+        self._warmed_up = False
+
+    @property
+    def embedding_client(self) -> EmbeddingClient:
+        """Get the embedding client, using global instance if not set."""
+        if self._embedding_client is None:
+            self._embedding_client = get_embedding_client()
+        return self._embedding_client
+
+    def warmup(self):
+        """
+        Warm up the embedding service to avoid cold-start latency.
+        Call this at application startup.
+        """
+        import time as perf_time
+        start = perf_time.perf_counter()
+
+        if not self._warmed_up:
+            self.embedding_client.warmup()
+            self._warmed_up = True
+
+        warmup_ms = (perf_time.perf_counter() - start) * 1000
+        logger.info(f"[RAG] Warmup complete in {warmup_ms:.1f}ms")
     
     def _create_event_text(self, event: Event) -> str:
         """Create searchable text representation of an event for embedding."""
@@ -110,35 +248,33 @@ class EventRAGService:
     
     def update_event_embeddings(self, event_ids: List[int] = None):
         """Update embeddings for specified events or all events."""
-        self._load_model()
-        
         # Get events to update
         if event_ids:
             events = Event.objects.filter(id__in=event_ids)
         else:
             # Update all events that don't have embeddings
             events = Event.objects.filter(embedding__isnull=True)
-        
+
         if not events.exists():
             logger.info("No events to update embeddings for")
             return
-        
+
         # Create text representations and compute embeddings
         texts = []
         event_list = list(events)
-        
+
         for event in event_list:
             text = self._create_event_text(event)
             texts.append(text)
-        
+
         logger.info(f"Computing embeddings for {len(texts)} events...")
-        new_embeddings = self.model.encode(texts, convert_to_numpy=True)
-        
+        new_embeddings = self.embedding_client.encode(texts, use_cache=False)
+
         # Update database with new embeddings
         for event, embedding in zip(event_list, new_embeddings):
             event.embedding = embedding.tolist()  # Convert numpy array to list for pgvector
             event.save(update_fields=['embedding'])
-        
+
         logger.info(f"Updated embeddings for {len(event_list)} events")
     
     def semantic_search(
@@ -174,10 +310,16 @@ class EventRAGService:
         Returns:
             List of (Event, similarity_score) tuples
         """
-        self._load_model()
+        import time as perf_time
 
-        # Compute query embedding
-        query_embedding = self.model.encode([query], convert_to_numpy=True)[0]
+        total_start = perf_time.perf_counter()
+
+        # Get query embedding via embedding client (handles caching internally)
+        embed_start = perf_time.perf_counter()
+        query_embedding = self.embedding_client.encode(query)
+        embed_ms = (perf_time.perf_counter() - embed_start) * 1000
+
+        logger.info(f"[RAG PERF] embed_ms={embed_ms:.1f}")
 
         # Perform vector similarity search using raw SQL (Django ORM CosineDistance has issues)
         from django.db import connection
@@ -239,40 +381,55 @@ class EventRAGService:
             params.extend([user_lat, user_lng, user_lat, max_distance_miles])
         
         where_clause = " AND ".join(where_conditions)
-        
-        # Separate filter params from embedding/limit params  
+
+        # Separate filter params from embedding/limit params
         filter_params = params.copy()
+
+        # Timing: numpy to list conversion
+        tolist_start = perf_time.perf_counter()
         query_embedding_list = query_embedding.tolist()
-        
+        tolist_ms = (perf_time.perf_counter() - tolist_start) * 1000
+
+        # SQL query timing
+        sql_start = perf_time.perf_counter()
         with connection.cursor() as cursor:
             # Build the complete SQL with correct parameter order
             sql = f'''
                 SELECT id, 1 - (embedding <=> %s::vector) as similarity
-                FROM events_event 
+                FROM events_event
                 WHERE {where_clause}
-                ORDER BY similarity DESC 
+                ORDER BY similarity DESC
                 LIMIT %s
             '''
             # Parameters: [query_embedding, filter_params..., top_k]
             all_params = [query_embedding_list] + filter_params + [top_k]
             cursor.execute(sql, all_params)
-            
+
             sql_results = cursor.fetchall()
-        
-        # Convert SQL results back to Event objects with similarity scores
+        sql_ms = (perf_time.perf_counter() - sql_start) * 1000
+
+        # ORM fetch timing
+        orm_start = perf_time.perf_counter()
         event_ids = [row[0] for row in sql_results]
         similarity_scores = {row[0]: row[1] for row in sql_results}
-        
+
         # Get Event objects in the same order
-        events = Event.objects.filter(id__in=event_ids)
+        events = Event.objects.filter(id__in=event_ids).select_related('venue')
         event_dict = {event.id: event for event in events}
-        
+
         event_similarity_pairs = [
-            (event_dict[event_id], similarity_scores[event_id]) 
+            (event_dict[event_id], similarity_scores[event_id])
             for event_id in event_ids if event_id in event_dict
         ]
-        
-        logger.info(f"Found {len(event_similarity_pairs)} semantic matches for query: '{query}'")
+        orm_ms = (perf_time.perf_counter() - orm_start) * 1000
+
+        total_ms = (perf_time.perf_counter() - total_start) * 1000
+
+        logger.info(
+            f"[RAG PERF] query='{query[:30]}...' embed_ms={embed_ms:.1f}, "
+            f"tolist_ms={tolist_ms:.1f}, sql_ms={sql_ms:.1f}, orm_ms={orm_ms:.1f}, "
+            f"total_ms={total_ms:.1f}, results={len(event_similarity_pairs)}"
+        )
         return event_similarity_pairs
     
     def get_context_events(
@@ -547,7 +704,7 @@ class EventRAGService:
         events = Event.objects.filter(
             start_time__gt=timezone.now()
         ).order_by('start_time')[:max_events]
-        
+
         return [
             {
                 'id': event.id,
@@ -567,14 +724,443 @@ class EventRAGService:
             for event in events
         ]
 
+    # =========================================================================
+    # Enhanced Tiered Retrieval with Multi-Factor Scoring
+    # =========================================================================
+
+    def get_context_events_tiered(
+        self,
+        user_message: str,
+        # Tier sizes
+        max_recommended: int = 10,
+        max_additional: int = 15,
+        max_context: int = 50,
+        # Scoring configuration
+        similarity_threshold: float = 0.15,
+        scoring_weights: Optional[ScoringWeights] = None,
+        # Location parameters - prefer location_id over string
+        location_id: Optional[int] = None,
+        location: Optional[str] = None,  # Fallback if no location_id
+        max_distance_miles: Optional[float] = None,
+        user_lat: Optional[float] = None,
+        user_lng: Optional[float] = None,
+        default_state: Optional[str] = None,
+        # Date parameters
+        time_filter_days: Optional[int] = 30,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        # Other filters
+        is_virtual: Optional[bool] = None,
+        # Search restriction
+        candidate_ids: Optional[List[int]] = None,
+        # Debugging
+        trace: Optional['TraceRecorder'] = None,
+    ) -> RAGResult:
+        """
+        Get tiered event results with multi-factor scoring.
+
+        This is the enhanced version of get_context_events that returns:
+        - recommended_events: Top matches for LLM context (high confidence)
+        - additional_events: Good matches for secondary display
+        - context_events: All matches for map display
+
+        Each event includes a scoring breakdown showing contribution of each factor.
+
+        Args:
+            user_message: User's natural language query
+            max_recommended: Max events in recommended tier (default 10)
+            max_additional: Max events in additional tier (default 15)
+            max_context: Max events in context tier (default 50)
+            similarity_threshold: Minimum semantic similarity to include
+            scoring_weights: Custom weights for scoring factors (default balanced)
+            location_id: Location table ID for deterministic geo-filtering
+            location: Location string (fallback if no location_id)
+            max_distance_miles: Max distance filter
+            user_lat/user_lng: User coordinates (overrides location resolution)
+            default_state: State for ambiguous location resolution
+            time_filter_days: Days ahead to search (ignored if date_from/to set)
+            date_from/date_to: Explicit date range
+            is_virtual: Filter by virtual/in-person
+            candidate_ids: Restrict search to these event IDs
+            trace: TraceRecorder for debugging
+
+        Returns:
+            RAGResult with tiered events and metadata
+        """
+        import time
+        retrieval_start = time.time()
+
+        weights = scoring_weights or ScoringWeights()
+
+        try:
+            # Step 1: Resolve location from location_id (preferred) or string
+            effective_lat = user_lat
+            effective_lng = user_lng
+            location_filter = None
+            resolved_location = None
+            location_resolve_ms = 0
+
+            # If location_id provided, use it directly (deterministic)
+            if location_id is not None and (effective_lat is None or effective_lng is None):
+                location_resolve_start = time.time()
+                try:
+                    from locations.models import Location
+                    loc = Location.objects.get(id=location_id)
+                    effective_lat = float(loc.latitude)
+                    effective_lng = float(loc.longitude)
+                    if max_distance_miles is None:
+                        max_distance_miles = 10.0
+                    resolved_location = {'id': loc.id, 'name': str(loc), 'source': 'location_id'}
+                    location_resolve_ms = int((time.time() - location_resolve_start) * 1000)
+                    logger.info(f"Location resolved from ID {location_id}: {loc}")
+
+                    if trace:
+                        trace.event('location_resolution', {
+                            'source': 'location_id',
+                            'location_id': location_id,
+                            'matched': str(loc),
+                            'latitude': effective_lat,
+                            'longitude': effective_lng,
+                            'resolution_type': 'id_lookup',
+                        }, latency_ms=location_resolve_ms)
+
+                except Exception as e:
+                    logger.warning(f"Location ID {location_id} lookup failed: {e}")
+                    if trace:
+                        trace.event('location_resolution', {
+                            'source': 'location_id',
+                            'location_id': location_id,
+                            'matched': None,
+                            'resolution_type': 'error',
+                            'error': str(e),
+                        }, latency_ms=int((time.time() - location_resolve_start) * 1000))
+
+            # Fallback to string-based resolution if no location_id
+            if effective_lat is None and location:
+                location_resolve_start = time.time()
+                location_hints = self._extract_location_hints(user_message)
+                location_query = location or (location_hints[0] if location_hints else None)
+
+                if location_query:
+                    try:
+                        from locations.services import resolve_location
+                        result = resolve_location(location_query, default_state=default_state)
+                        location_resolve_ms = int((time.time() - location_resolve_start) * 1000)
+
+                        if result.matched_location:
+                            effective_lat = float(result.latitude)
+                            effective_lng = float(result.longitude)
+                            if max_distance_miles is None:
+                                max_distance_miles = 10.0
+                            resolved_location = {
+                                'id': result.matched_location.id,
+                                'name': result.display_name,
+                                'source': 'string_resolution',
+                                'confidence': result.confidence,
+                            }
+                            logger.info(f"Location resolved from string: '{location_query}' -> {result.display_name}")
+
+                            if trace:
+                                trace.event('location_resolution', {
+                                    'source': 'string',
+                                    'query': location_query,
+                                    'matched': result.display_name,
+                                    'matched_id': result.matched_location.id,
+                                    'latitude': effective_lat,
+                                    'longitude': effective_lng,
+                                    'confidence': result.confidence,
+                                    'is_ambiguous': result.is_ambiguous,
+                                    'resolution_type': 'geo',
+                                }, latency_ms=location_resolve_ms)
+                        else:
+                            location_filter = location_query
+                            if trace:
+                                trace.event('location_resolution', {
+                                    'source': 'string',
+                                    'query': location_query,
+                                    'matched': None,
+                                    'resolution_type': 'text_fallback',
+                                }, latency_ms=location_resolve_ms)
+                    except Exception as e:
+                        logger.warning(f"Location resolution failed: {e}")
+                        location_filter = location_query
+
+            # Step 2: Extract dates from query if not provided
+            if date_from is None and date_to is None:
+                from api.date_extraction import extract_dates_from_query
+                date_result = extract_dates_from_query(user_message, timezone.localtime(timezone.now()))
+                if date_result.date_from and date_result.confidence >= 0.5:
+                    if timezone.is_naive(date_result.date_from):
+                        date_from = timezone.make_aware(date_result.date_from)
+                    else:
+                        date_from = date_result.date_from
+                    if timezone.is_naive(date_result.date_to):
+                        date_to = timezone.make_aware(date_result.date_to)
+                    else:
+                        date_to = date_result.date_to
+                    time_filter_days = None
+
+            # Step 3: Perform semantic search
+            search_start = time.time()
+            total_to_fetch = max_recommended + max_additional + max_context
+
+            results = self.semantic_search(
+                query=user_message,
+                top_k=total_to_fetch * 2,  # Fetch extra for filtering
+                time_filter_days=time_filter_days,
+                location_filter=location_filter,
+                only_future_events=True,
+                date_from=date_from,
+                date_to=date_to,
+                is_virtual=is_virtual,
+                max_distance_miles=max_distance_miles if effective_lat else None,
+                user_lat=effective_lat,
+                user_lng=effective_lng,
+            )
+            search_ms = int((time.time() - search_start) * 1000)
+
+            # If candidate_ids provided, filter to those
+            if candidate_ids:
+                candidate_set = set(candidate_ids)
+                results = [(e, s) for e, s in results if e.id in candidate_set]
+
+            # Step 4: Compute multi-factor scores for each event
+            now = timezone.now()
+            scored_events: List[Tuple[Event, float, float, RankingFactors]] = []
+
+            for event, semantic_score in results:
+                if semantic_score < similarity_threshold:
+                    continue
+
+                factors = self._compute_ranking_factors(
+                    event=event,
+                    semantic_score=semantic_score,
+                    center_lat=effective_lat,
+                    center_lng=effective_lng,
+                    now=now,
+                    user_message=user_message,
+                )
+
+                # Compute weighted final score
+                final_score = (
+                    weights.semantic_similarity * factors.semantic_similarity +
+                    weights.location_match * factors.location_match +
+                    weights.time_relevance * factors.time_relevance +
+                    weights.category_match * factors.category_match +
+                    weights.popularity * factors.popularity
+                )
+
+                scored_events.append((event, semantic_score, final_score, factors))
+
+            # Sort by final score descending
+            scored_events.sort(key=lambda x: x[2], reverse=True)
+
+            # Step 5: Assign to tiers
+            recommended: List[RankedEvent] = []
+            additional: List[RankedEvent] = []
+            context: List[RankedEvent] = []
+
+            for i, (event, semantic_score, final_score, factors) in enumerate(scored_events):
+                event_data = self._event_to_dict(event, semantic_score)
+
+                if i < max_recommended:
+                    tier = 'recommended'
+                    recommended.append(RankedEvent(event_data, final_score, factors, tier))
+                elif i < max_recommended + max_additional:
+                    tier = 'additional'
+                    additional.append(RankedEvent(event_data, final_score, factors, tier))
+                elif i < max_recommended + max_additional + max_context:
+                    tier = 'context'
+                    context.append(RankedEvent(event_data, final_score, factors, tier))
+                else:
+                    break
+
+            # Build result
+            result = RAGResult(
+                recommended_events=recommended,
+                additional_events=additional,
+                context_events=context,
+                total_considered=len(results),
+                search_metadata={
+                    'query': user_message,
+                    'weights': {
+                        'semantic_similarity': weights.semantic_similarity,
+                        'location_match': weights.location_match,
+                        'time_relevance': weights.time_relevance,
+                        'category_match': weights.category_match,
+                        'popularity': weights.popularity,
+                    },
+                    'location_used': resolved_location,
+                    'similarity_threshold': similarity_threshold,
+                    'search_time_ms': search_ms,
+                    'location_resolve_time_ms': location_resolve_ms,
+                },
+            )
+
+            # Record trace
+            if trace:
+                trace.event('retrieval', {
+                    'query_text': user_message,
+                    'total_candidates': len(results),
+                    'above_threshold': len(scored_events),
+                    'threshold': similarity_threshold,
+                    'tiers': {
+                        'recommended': len(recommended),
+                        'additional': len(additional),
+                        'context': len(context),
+                    },
+                    'weights': result.search_metadata['weights'],
+                    'geo_filter_used': effective_lat is not None,
+                    'text_filter_used': location_filter is not None,
+                    'candidates': [
+                        {
+                            'id': e.event_data['id'],
+                            'title': e.event_data['title'],
+                            'tier': e.tier,
+                            'final_score': round(e.final_score, 3),
+                            'factors': e.ranking_factors.to_dict(),
+                        }
+                        for e in result.all_events[:30]  # Top 30 for trace
+                    ],
+                }, latency_ms=search_ms)
+
+            logger.info(
+                f"Tiered retrieval: {len(recommended)} recommended, "
+                f"{len(additional)} additional, {len(context)} context "
+                f"(from {len(results)} candidates)"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in get_context_events_tiered: {e}")
+            import traceback
+            if trace:
+                trace.event('error', {
+                    'stage': 'retrieval',
+                    'message': str(e),
+                    'stack': traceback.format_exc(),
+                })
+            return RAGResult(total_considered=0, search_metadata={'error': str(e)})
+
+    def _compute_ranking_factors(
+        self,
+        event: Event,
+        semantic_score: float,
+        center_lat: Optional[float],
+        center_lng: Optional[float],
+        now: datetime,
+        user_message: str,
+    ) -> RankingFactors:
+        """Compute individual ranking factors for an event."""
+        factors = RankingFactors()
+
+        # Semantic similarity (already 0-1)
+        factors.semantic_similarity = max(0.0, min(1.0, semantic_score))
+
+        # Location match: inverse of distance (closer = higher)
+        if center_lat is not None and center_lng is not None and event.venue:
+            venue = event.venue
+            if venue.latitude and venue.longitude:
+                from locations.services import haversine_distance
+                distance = haversine_distance(
+                    center_lat, center_lng,
+                    float(venue.latitude), float(venue.longitude)
+                )
+                factors.distance_miles = distance
+                # Score decays with distance: 1.0 at 0 miles, ~0.5 at 5 miles, ~0.1 at 20 miles
+                factors.location_match = max(0.0, 1.0 / (1.0 + distance / 5.0))
+        else:
+            # No location available - neutral score
+            factors.location_match = 0.5
+
+        # Time relevance: sooner events score higher
+        if event.start_time:
+            days_until = (event.start_time - now).total_seconds() / 86400
+            factors.days_until_event = max(0, days_until)
+            # Score decays with time: 1.0 today, ~0.7 at 3 days, ~0.5 at 7 days, ~0.2 at 30 days
+            factors.time_relevance = max(0.0, 1.0 / (1.0 + days_until / 7.0))
+        else:
+            factors.time_relevance = 0.5
+
+        # Category match: check for tag overlap with query keywords
+        query_words = set(user_message.lower().split())
+        event_tags = set()
+        if event.audience_tags:
+            event_tags.update(tag.lower() for tag in event.audience_tags)
+        if event.metadata_tags:
+            event_tags.update(tag.lower() for tag in event.metadata_tags)
+
+        if event_tags and query_words:
+            overlap = len(query_words & event_tags)
+            factors.category_match = min(1.0, overlap / 3.0)  # Cap at 3 matches
+        else:
+            factors.category_match = 0.5
+
+        # Popularity: based on source quality (placeholder - expand later)
+        # For now, use a neutral 0.5 unless we have better signals
+        factors.popularity = 0.5
+
+        return factors
+
+    def _event_to_dict(self, event: Event, similarity_score: float) -> Dict[str, Any]:
+        """Convert event to dictionary format for API response."""
+        return {
+            'id': event.id,
+            'title': clean_html_content(event.title),
+            'description': clean_html_content(event.description),
+            'location': clean_html_content(event.get_location_string()),
+            'room_name': event.room_name or '',
+            'full_address': event.get_full_address(),
+            'city': event.get_city(),
+            'organizer': event.organizer,
+            'event_status': event.event_status,
+            'age_range': event.age_range or '',
+            'audience_tags': event.audience_tags or [],
+            'is_virtual': event.is_virtual,
+            'requires_registration': event.requires_registration,
+            'start_time': event.start_time.isoformat() if event.start_time else None,
+            'end_time': event.end_time.isoformat() if event.end_time else None,
+            'url': event.url,
+            'similarity_score': float(similarity_score),
+        }
+
 
 # Global RAG service instance
 _rag_service = None
+_rag_service_warmed_up = False
 
 
-def get_rag_service() -> EventRAGService:
-    """Get the global RAG service instance."""
-    global _rag_service
+def get_rag_service(warmup: bool = False) -> EventRAGService:
+    """
+    Get the global RAG service instance.
+
+    Args:
+        warmup: If True, also warm up the model (call this at app startup)
+    """
+    global _rag_service, _rag_service_warmed_up
     if _rag_service is None:
         _rag_service = EventRAGService()
+    if warmup and not _rag_service_warmed_up:
+        _rag_service.warmup()
+        _rag_service_warmed_up = True
     return _rag_service
+
+
+def warmup_rag_service():
+    """
+    Warm up the RAG service by loading the model and running initial inference.
+    Call this at application startup to avoid cold-start latency on first request.
+
+    Usage in Django:
+        # In apps.py ready() method or a startup signal
+        from api.rag_service import warmup_rag_service
+        warmup_rag_service()
+
+    Usage in FastAPI:
+        # In app startup event
+        @app.on_event("startup")
+        async def startup():
+            warmup_rag_service()
+    """
+    get_rag_service(warmup=True)

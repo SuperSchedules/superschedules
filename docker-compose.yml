@@ -1,6 +1,34 @@
 version: '3.8'
 
 services:
+  # Embedding microservice - loads sentence-transformers model ONCE
+  # All other services share this single instance via HTTP
+  embedding:
+    build:
+      context: .
+      args:
+        BUILD_TIME: ${BUILD_TIME:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+    ports:
+      - "8003:8003"
+    command: >
+      python -m uvicorn embedding_service.app:app
+      --host 0.0.0.0
+      --port 8003
+      --workers 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # IMPORTANT: Only 1 replica to share model instance (~500MB RAM)
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1G
+
   web:
     build:
       context: .
@@ -17,14 +45,51 @@ services:
       - DB_PASSWORD=postgres
       - COLLECTOR_URL=http://collector:8001
       - NAVIGATOR_URL=http://navigator:8004
+      - EMBEDDING_SERVICE_URL=http://embedding:8003
     depends_on:
-      - db
+      db:
+        condition: service_started
+      embedding:
+        condition: service_healthy
     command: >
       gunicorn config.asgi:application
       -k uvicorn.workers.UvicornWorker
       -b 0.0.0.0:8000
       --workers 3
       --access-logfile -
+
+  # FastAPI chat service with SSE streaming
+  chat:
+    build:
+      context: .
+      args:
+        BUILD_TIME: ${BUILD_TIME:-local}
+        GIT_COMMIT: ${GIT_COMMIT:-local}
+    ports:
+      - "8002:8002"
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-key}
+      - DB_HOST=db
+      - DB_NAME=superschedules
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - EMBEDDING_SERVICE_URL=http://embedding:8003
+    depends_on:
+      db:
+        condition: service_started
+      embedding:
+        condition: service_healthy
+    command: >
+      python -m uvicorn chat_service.app:app
+      --host 0.0.0.0
+      --port 8002
+      --workers 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/v1/chat/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   celery-worker:
     build:
@@ -39,8 +104,12 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - COLLECTOR_URL=http://collector:8001
+      - EMBEDDING_SERVICE_URL=http://embedding:8003
     depends_on:
-      - db
+      db:
+        condition: service_started
+      embedding:
+        condition: service_healthy
     command: >
       celery -A config worker
       --loglevel=INFO

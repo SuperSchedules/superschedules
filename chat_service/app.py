@@ -38,6 +38,26 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Warm up expensive services on startup to avoid cold-start latency."""
+    import os
+
+    # Only warm up if not in testing mode
+    if os.environ.get("TESTING") != "1":
+        logger.info("[STARTUP] Warming up RAG service...")
+        try:
+            from api.rag_service import warmup_rag_service
+            # Run in thread pool to avoid blocking the event loop
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, warmup_rag_service)
+            logger.info("[STARTUP] RAG service warmup complete")
+        except Exception as e:
+            logger.warning(f"[STARTUP] RAG warmup failed (non-fatal): {e}")
+
+
 app.include_router(debug_routes.router)
 # CORS middleware - allow production and development origins
 allowed_origins = [
@@ -63,6 +83,15 @@ app.add_middleware(
 )
 
 
+class ScoringWeightsRequest(BaseModel):
+    """Configurable scoring weights for RAG ranking."""
+    semantic_similarity: float = 0.4
+    location_match: float = 0.25
+    time_relevance: float = 0.20
+    category_match: float = 0.10
+    popularity: float = 0.05
+
+
 class ChatRequest(BaseModel):
     message: str
     context: Dict[str, Any] = {}
@@ -73,13 +102,41 @@ class ChatRequest(BaseModel):
     preferred_model: str | None = None  # Which model to use in single mode
     debug: bool = False  # Enable tracing for debugging (creates ChatDebugRun record)
 
+    # Enhanced location handling - prefer location_id over string
+    location_id: int | None = None  # Primary: Location table ID for deterministic filtering
+    # context.location is still supported as fallback
+
+    # Enhanced RAG configuration
+    use_tiered_retrieval: bool = True  # Use new tiered retrieval with scoring
+    max_recommended: int = 10  # Events to show prominently / pass to LLM
+    max_additional: int = 15  # Secondary display events
+    max_context: int = 50  # All events for map display
+    scoring_weights: ScoringWeightsRequest | None = None  # Custom scoring weights
+
+
+class EventMetadata(BaseModel):
+    """Scoring breakdown for a returned event."""
+    tier: str  # 'recommended', 'additional', 'context'
+    final_score: float
+    ranking_factors: Dict[str, Any]
+
 
 class StreamChunk(BaseModel):
     model: str  # 'A' or 'B'
     token: str
     done: bool = False
     error: str | None = None
+    error_code: str | None = None  # Machine-readable error code
+
+    # Legacy field (kept for backward compatibility)
     suggested_event_ids: List[int] = []
+
+    # Enhanced event response (tiered)
+    recommended_event_ids: List[int] = []  # Top recommendations for LLM/display
+    all_event_ids: List[int] = []  # Full set for map display
+    new_event_ids: List[int] = []  # NEW this turn (for incremental enrichment)
+    event_metadata: Dict[int, Dict[str, Any]] = {}  # id -> {tier, final_score, ranking_factors}
+
     follow_up_questions: List[str] = []
     response_time_ms: int | None = None
     session_id: int | None = None  # Return session ID to frontend
@@ -335,9 +392,16 @@ async def stream_chat(
         logger.info(f"Debug mode enabled, trace ID: {debug_run.id}")
 
     async def generate_stream():
+        from api.rag_service import RAGResult
+
         full_response = ""  # Track full response for saving
         response_time_ms = None
         model_name_used = None
+
+        # Track event data for final response
+        recommended_event_ids = []
+        all_event_ids = []
+        event_metadata = {}
 
         try:
             # Get LLM service
@@ -355,8 +419,49 @@ async def stream_chat(
             except Exception as e:
                 logger.warning("Ollama health check failed: %s", e)
 
-            # Get relevant events for context (using frontend filters if provided)
-            relevant_events = await get_relevant_events(request.message, request.context, trace=trace)
+            # Build scoring weights from request if provided
+            scoring_weights_dict = None
+            if request.scoring_weights:
+                scoring_weights_dict = {
+                    'semantic_similarity': request.scoring_weights.semantic_similarity,
+                    'location_match': request.scoring_weights.location_match,
+                    'time_relevance': request.scoring_weights.time_relevance,
+                    'category_match': request.scoring_weights.category_match,
+                    'popularity': request.scoring_weights.popularity,
+                }
+
+            # Get relevant events for context (using tiered retrieval if enabled)
+            rag_result = await get_relevant_events(
+                message=request.message,
+                context=request.context,
+                trace=trace,
+                use_tiered=request.use_tiered_retrieval,
+                location_id=request.location_id,
+                max_recommended=request.max_recommended,
+                max_additional=request.max_additional,
+                max_context=request.max_context,
+                scoring_weights=scoring_weights_dict,
+            )
+
+            # Handle both tiered and legacy results
+            if isinstance(rag_result, RAGResult):
+                # Tiered result - extract events for LLM (recommended only)
+                relevant_events = [e.event_data for e in rag_result.recommended_events]
+
+                # Populate event tracking for final response
+                recommended_event_ids = rag_result.recommended_ids
+                all_event_ids = rag_result.all_ids
+                for ranked_event in rag_result.all_events:
+                    event_metadata[ranked_event.event_data['id']] = {
+                        'tier': ranked_event.tier,
+                        'final_score': round(ranked_event.final_score, 3),
+                        'ranking_factors': ranked_event.ranking_factors.to_dict(),
+                    }
+            else:
+                # Legacy result - list of event dicts
+                relevant_events = rag_result
+                recommended_event_ids = [e['id'] for e in relevant_events[:10]]
+                all_event_ids = [e['id'] for e in relevant_events]
 
             # Add conversation history to context for LLM prompt
             enhanced_context = {**request.context, 'chat_history': conversation_history}
@@ -374,7 +479,8 @@ async def stream_chat(
                     model_name=model_name_used,
                     model_id=model_id,
                     max_retries=1,
-                    user_context=enhanced_context
+                    user_context=enhanced_context,
+                    trace=trace  # Pass trace for debug events
                 )
 
                 # Stream from single model
@@ -454,22 +560,31 @@ async def stream_chat(
                     'assistant',
                     full_response,
                     metadata={'model': model_name_used, 'response_time_ms': response_time_ms},
-                    event_ids=[e['id'] for e in relevant_events[:5]] if relevant_events else None
+                    event_ids=recommended_event_ids[:10] if recommended_event_ids else None
                 )
 
             # Finalize debug trace if enabled
             if trace:
                 from traces.diagnostics import compute_diagnostics
+
                 diagnostics = compute_diagnostics(trace.events)
-                trace.finalize(status='success', final_answer=full_response, diagnostics=diagnostics)
+
+                # Use async finalize for proper DB transaction handling
+                await trace.finalize_async(status='success', final_answer=full_response, diagnostics=diagnostics)
                 logger.info(f"Debug trace finalized: {debug_run_id}")
 
-            # Send final completion marker with session_id and debug_run_id
+            # Send final completion marker with session_id, event data, and debug_run_id
             final_data = {
                 'model': 'SYSTEM',
                 'token': '',
                 'done': True,
                 'session_id': session.id,
+                # Legacy field for backward compatibility
+                'suggested_event_ids': recommended_event_ids[:5],
+                # Enhanced event response (tiered)
+                'recommended_event_ids': recommended_event_ids,
+                'all_event_ids': all_event_ids,
+                'event_metadata': event_metadata,
             }
             if debug_run_id:
                 final_data['debug_run_id'] = str(debug_run_id)
@@ -479,7 +594,11 @@ async def stream_chat(
             # Finalize debug trace with error
             if trace:
                 import traceback
-                trace.finalize(status='error', error_message=str(e), error_stack=traceback.format_exc())
+                error_msg = str(e)
+                error_stack = traceback.format_exc()
+
+                # Use async finalize for proper DB transaction handling
+                await trace.finalize_async(status='error', error_message=error_msg, error_stack=error_stack)
 
             error_chunk = StreamChunk(
                 model="SYSTEM",
@@ -506,7 +625,8 @@ async def stream_model_response(
     context_events: List[Dict],
     model_name: str | None = None,
     model_id: str = "A",
-    user_context: Dict[str, Any] = None
+    user_context: Dict[str, Any] = None,
+    trace = None  # Optional TraceRecorder for debug tracing
 ):
     """
     Stream response from a single model using Ollama.
@@ -519,7 +639,10 @@ async def stream_model_response(
         model_name: Model to use (defaults to primary/backup based on model_id)
         model_id: "A" or "B" for A/B testing
         user_context: Frontend context (location, date_range, preferences, chat_history)
+        trace: Optional TraceRecorder for recording debug events
     """
+    import time as time_module
+
     try:
         # Use default models if not specified
         if model_name is None:
@@ -545,7 +668,42 @@ async def stream_model_response(
             },
             conversation_history=conversation_history,
             user_preferences=preferences,
+            # Don't pass trace here - we'll record events async below
         )
+
+        # Record trace events using async methods for proper DB transaction handling
+        if trace:
+            # Record context blocks
+            await trace.event_async('context_block', {
+                'block_type': 'system_prompt',
+                'text': system_prompt[:500] + '...' if len(system_prompt) > 500 else system_prompt,
+                'chars': len(system_prompt),
+                'tokens_est': len(system_prompt) // 4,
+            })
+
+            if context_events:
+                events_text = f"[{len(context_events)} events provided to LLM]"
+                await trace.event_async('context_block', {
+                    'block_type': 'events',
+                    'text': events_text,
+                    'chars': len(events_text),
+                    'event_count': len(context_events),
+                })
+
+            # Record final prompt
+            await trace.event_async('prompt_final', {
+                'system_prompt': system_prompt,
+                'user_prompt': user_prompt[:1000] + '...' if len(user_prompt) > 1000 else user_prompt,
+                'system_chars': len(system_prompt),
+                'user_chars': len(user_prompt),
+            })
+
+            # Record LLM request event
+            await trace.event_async('llm_request', {
+                'model': model_name,
+                'prompt_chars': len(user_prompt),
+                'system_chars': len(system_prompt),
+            })
         
         full_response = ""
         
@@ -565,6 +723,14 @@ async def stream_model_response(
                 )
                 yield chunk
             else:
+                # Record LLM response event (async for proper DB handling)
+                if trace:
+                    await trace.event_async('llm_response', {
+                        'full_response': full_response,
+                        'chars': len(full_response),
+                        'tokens_est': len(full_response) // 4,
+                    }, latency_ms=chunk_data.get('response_time_ms'))
+
                 # Final chunk with metadata
                 final_chunk = StreamChunk(
                     model=model_id,
@@ -574,7 +740,7 @@ async def stream_model_response(
                     follow_up_questions=extract_follow_up_questions(full_response),
                     response_time_ms=chunk_data['response_time_ms']
                 )
-                
+
                 if chunk_data.get('success', True):
                     yield final_chunk
                 else:
@@ -585,7 +751,7 @@ async def stream_model_response(
                         error=chunk_data.get('error', 'Unknown error')
                     )
                     yield error_chunk
-        
+
     except Exception as e:
         error_chunk = StreamChunk(
             model=model_id,
@@ -597,7 +763,18 @@ async def stream_model_response(
 
 
 
-async def get_relevant_events(message: str, context: Dict[str, Any] = None, trace=None) -> List[Dict]:
+async def get_relevant_events(
+    message: str,
+    context: Dict[str, Any] = None,
+    trace=None,
+    # New parameters for tiered retrieval
+    use_tiered: bool = False,
+    location_id: int | None = None,
+    max_recommended: int = 10,
+    max_additional: int = 15,
+    max_context: int = 50,
+    scoring_weights: Dict[str, float] | None = None,
+):
     """
     Get relevant events for the message context using RAG.
 
@@ -605,7 +782,19 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None, trac
         message: User's search message
         context: Optional context with filters (location, date_range, is_virtual, user_location, etc.)
         trace: Optional TraceRecorder for debugging
+        use_tiered: Use new tiered retrieval with multi-factor scoring
+        location_id: Location table ID for deterministic filtering
+        max_recommended: Max events in recommended tier
+        max_additional: Max events in additional tier
+        max_context: Max events in context tier
+        scoring_weights: Custom scoring weights dict
+
+    Returns:
+        If use_tiered=False: List[Dict] (legacy format)
+        If use_tiered=True: RAGResult with tiered events
     """
+    from api.rag_service import ScoringWeights, RAGResult
+
     try:
         # Use RAG service for semantic search
         rag_service = get_rag_service()
@@ -624,7 +813,7 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None, trac
         user_lng = None
 
         if context:
-            # Extract location from context
+            # Extract location from context (fallback if no location_id)
             location = context.get('location')
 
             # Extract date range from context
@@ -640,44 +829,82 @@ async def get_relevant_events(message: str, context: Dict[str, Any] = None, trac
                 if date_from or date_to:
                     time_filter_days = None
 
-            # NEW: Virtual/in-person filter
+            # Virtual/in-person filter
             is_virtual = context.get('is_virtual')  # True, False, or None
 
-            # NEW: Geo-distance filter
+            # Geo-distance filter
             max_distance_miles = context.get('max_distance_miles')
             user_location = context.get('user_location')
             if user_location:
                 user_lat = user_location.get('lat')
                 user_lng = user_location.get('lng')
 
-        def run_rag_search():
-            logger.info(f"FastAPI RAG call: date_from={date_from}, date_to={date_to}, time_filter_days={time_filter_days}")
-            return rag_service.get_context_events(
-                user_message=message,
-                max_events=20,
-                similarity_threshold=0.2,
-                time_filter_days=time_filter_days,
-                date_from=date_from,
-                date_to=date_to,
-                location=location,
-                is_virtual=is_virtual,
-                max_distance_miles=max_distance_miles,
-                user_lat=user_lat,
-                user_lng=user_lng,
-                trace=trace,
-            )
+        if use_tiered:
+            # Use new tiered retrieval with multi-factor scoring
+            weights = ScoringWeights.from_dict(scoring_weights) if scoring_weights else None
 
-        context_events = await loop.run_in_executor(None, run_rag_search)
+            def run_tiered_search():
+                logger.info(f"Tiered RAG: location_id={location_id}, weights={scoring_weights}")
+                return rag_service.get_context_events_tiered(
+                    user_message=message,
+                    max_recommended=max_recommended,
+                    max_additional=max_additional,
+                    max_context=max_context,
+                    scoring_weights=weights,
+                    location_id=location_id,
+                    location=location,
+                    max_distance_miles=max_distance_miles,
+                    user_lat=user_lat,
+                    user_lng=user_lng,
+                    time_filter_days=time_filter_days,
+                    date_from=date_from,
+                    date_to=date_to,
+                    is_virtual=is_virtual,
+                    trace=trace,
+                )
 
-        if context_events:
-            logger.info("RAG found %d relevant events", len(context_events))
-            return context_events
+            rag_result = await loop.run_in_executor(None, run_tiered_search)
+
+            if rag_result.all_events:
+                logger.info(f"Tiered RAG: {len(rag_result.recommended_events)} recommended, {len(rag_result.all_events)} total")
+            else:
+                logger.info("Tiered RAG: no events found")
+
+            return rag_result
+
         else:
-            logger.info("RAG found no relevant events")
-            return []
+            # Legacy mode - use old get_context_events
+            def run_rag_search():
+                logger.info(f"Legacy RAG: date_from={date_from}, date_to={date_to}, time_filter_days={time_filter_days}")
+                return rag_service.get_context_events(
+                    user_message=message,
+                    max_events=20,
+                    similarity_threshold=0.2,
+                    time_filter_days=time_filter_days,
+                    date_from=date_from,
+                    date_to=date_to,
+                    location=location,
+                    is_virtual=is_virtual,
+                    max_distance_miles=max_distance_miles,
+                    user_lat=user_lat,
+                    user_lng=user_lng,
+                    trace=trace,
+                )
+
+            context_events = await loop.run_in_executor(None, run_rag_search)
+
+            if context_events:
+                logger.info("RAG found %d relevant events", len(context_events))
+                return context_events
+            else:
+                logger.info("RAG found no relevant events")
+                return []
 
     except Exception as e:
         logger.error("Error in RAG search: %s", e)
+        # Return empty result appropriate for mode
+        if use_tiered:
+            return RAGResult(total_considered=0, search_metadata={'error': str(e)})
         return []
 
 
@@ -688,7 +915,8 @@ async def stream_model_response_with_retry(
     model_name: str | None = None,
     model_id: str = "A",
     max_retries: int = 2,
-    user_context: Dict[str, Any] = None
+    user_context: Dict[str, Any] = None,
+    trace = None  # Optional TraceRecorder for debug tracing
 ):
     """
     Stream response with retry logic for better reliability.
@@ -698,9 +926,10 @@ async def stream_model_response_with_retry(
             chunks_received = 0
             stream_completed = False
 
-            # Use original streaming function
+            # Use original streaming function (only pass trace on first attempt to avoid duplicate events)
             async for chunk in stream_model_response(
-                llm_service, message, context_events, model_name, model_id, user_context
+                llm_service, message, context_events, model_name, model_id, user_context,
+                trace=trace if attempt == 0 else None
             ):
                 chunks_received += 1
                 yield chunk

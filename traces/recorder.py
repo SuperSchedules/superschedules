@@ -196,6 +196,51 @@ class TraceRecorder:
         """Get total elapsed time since recorder was created."""
         return int((time.time() - self._start_time) * 1000)
 
+    async def event_async(self, stage: str, data: dict, latency_ms: int = None) -> dict:
+        """
+        Record a trace event from async context.
+
+        This wraps the synchronous event() method with sync_to_async
+        to ensure proper database transaction handling in async code.
+
+        Args:
+            stage: Event stage (input, retrieval, context_block, etc.)
+            data: Event payload data
+            latency_ms: Optional latency measurement in milliseconds
+
+        Returns:
+            The recorded event dict
+        """
+        from asgiref.sync import sync_to_async
+
+        @sync_to_async
+        def _record_event():
+            return self.event(stage, data, latency_ms)
+
+        return await _record_event()
+
+    async def finalize_async(
+        self,
+        status: str,
+        final_answer: str = '',
+        error_message: str = '',
+        error_stack: str = '',
+        diagnostics: dict = None,
+    ):
+        """
+        Complete the run from async context.
+
+        This wraps the synchronous finalize() method with sync_to_async
+        to ensure proper database transaction handling in async code.
+        """
+        from asgiref.sync import sync_to_async
+
+        @sync_to_async
+        def _finalize():
+            self.finalize(status, final_answer, error_message, error_stack, diagnostics)
+
+        await _finalize()
+
 
 class NullRecorder:
     """

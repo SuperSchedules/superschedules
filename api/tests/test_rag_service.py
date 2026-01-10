@@ -9,6 +9,7 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from model_bakery import baker
 from unittest.mock import patch, MagicMock
+import numpy as np
 
 from events.models import Event
 from venues.models import Venue
@@ -702,11 +703,10 @@ class TestCityLocationFiltering(RAGServiceTest):
 
     def setUp(self):
         super().setUp()
+        # Create a mock embedding client
+        self.mock_client = MagicMock()
         self.rag_service = EventRAGService()
-
-        # Mock the sentence transformer
-        self.mock_model = MagicMock()
-        self.rag_service.model = self.mock_model
+        self.rag_service._embedding_client = self.mock_client
 
         # Create venues in different cities
         self.newton_venue = baker.make(Venue, name="Newton Library", city="Newton", state="MA")
@@ -733,9 +733,8 @@ class TestCityLocationFiltering(RAGServiceTest):
 
     def test_location_filter_searches_city(self):
         """Test that location filter searches venue city field."""
-        import numpy as np
         mock_query_embedding = np.random.rand(384).astype(np.float32)
-        self.mock_model.encode.return_value = np.array([mock_query_embedding])
+        self.mock_client.encode.return_value = mock_query_embedding
 
         # Search for Newton events
         results = self.rag_service.semantic_search(
@@ -756,53 +755,294 @@ class TestEmbeddingManagement(RAGServiceTest):
 
     def setUp(self):
         super().setUp()
+        # Create a mock embedding client
+        self.mock_client = MagicMock()
         self.rag_service = EventRAGService()
-
-        # Mock the sentence transformer
-        self.mock_model = MagicMock()
-        self.rag_service.model = self.mock_model
+        self.rag_service._embedding_client = self.mock_client
 
     def test_update_event_embeddings_creates_embeddings(self):
         """Test that update_event_embeddings creates embeddings for events."""
-        import numpy as np
-        
-        # Mock embeddings output as numpy arrays with correct 384 dimensions 
+        # Mock embeddings output as numpy arrays with correct 384 dimensions
         # (matches sentence-transformers all-MiniLM-L6-v2 model dimensions)
         mock_embedding_1 = np.random.rand(384).astype(np.float32)
-        mock_embedding_2 = np.random.rand(384).astype(np.float32) 
+        mock_embedding_2 = np.random.rand(384).astype(np.float32)
         mock_embeddings = np.array([mock_embedding_1, mock_embedding_2])
-        self.mock_model.encode.return_value = mock_embeddings
-        
+        self.mock_client.encode.return_value = mock_embeddings
+
         # Update embeddings for specific events
         event_ids = [self.baby_storytime.id, self.dance_class.id]
         self.rag_service.update_event_embeddings(event_ids)
-        
+
         # Check that embeddings were saved
         updated_events = Event.objects.filter(id__in=event_ids)
         for event in updated_events:
             self.assertIsNotNone(event.embedding)
             self.assertEqual(len(event.embedding), 384)  # sentence-transformers all-MiniLM-L6-v2 dimension
-    
+
     def test_update_event_embeddings_uses_vectorized_text(self):
         """Test that embeddings are created from the proper vectorized text."""
-        import numpy as np
-        
         # Use proper 384-dimension numpy array
         mock_embedding = np.random.rand(384).astype(np.float32)
         mock_embeddings = np.array([mock_embedding])
-        self.mock_model.encode.return_value = mock_embeddings
-        
+        self.mock_client.encode.return_value = mock_embeddings
+
         self.rag_service.update_event_embeddings([self.baby_storytime.id])
-        
+
         # Verify encode was called with the vectorized text
-        self.mock_model.encode.assert_called_once()
-        call_args = self.mock_model.encode.call_args[0][0]  # First positional argument
-        
+        self.mock_client.encode.assert_called_once()
+        call_args = self.mock_client.encode.call_args[0][0]  # First positional argument
+
         # Should be list of vectorized texts
         self.assertEqual(len(call_args), 1)
         vectorized_text = call_args[0]
-        
+
         # Should contain key elements from vectorized text
         self.assertIn("Budding Bookworms", vectorized_text)
         self.assertIn("storytime", vectorized_text)
         self.assertIn("Children's Room", vectorized_text)
+
+
+class ScoringWeightsTest(TestCase):
+    """Test scoring weights configuration."""
+
+    def test_default_weights_sum_to_one(self):
+        """Default weights should sum to 1.0."""
+        from api.rag_service import ScoringWeights
+
+        weights = ScoringWeights()
+        total = (
+            weights.semantic_similarity
+            + weights.location_match
+            + weights.time_relevance
+            + weights.category_match
+            + weights.popularity
+        )
+        self.assertAlmostEqual(total, 1.0, places=2)
+
+    def test_from_dict_creates_weights(self):
+        """from_dict should create weights from dictionary."""
+        from api.rag_service import ScoringWeights
+
+        weights = ScoringWeights.from_dict({
+            'semantic_similarity': 0.5,
+            'location_match': 0.3,
+            'time_relevance': 0.1,
+            'category_match': 0.05,
+            'popularity': 0.05,
+        })
+        self.assertEqual(weights.semantic_similarity, 0.5)
+        self.assertEqual(weights.location_match, 0.3)
+
+    def test_from_dict_uses_defaults_for_missing(self):
+        """from_dict should use defaults for missing keys."""
+        from api.rag_service import ScoringWeights
+
+        weights = ScoringWeights.from_dict({'semantic_similarity': 0.6})
+        self.assertEqual(weights.semantic_similarity, 0.6)
+        self.assertEqual(weights.location_match, 0.25)  # Default
+
+
+class RankingFactorsTest(TestCase):
+    """Test ranking factors computation."""
+
+    def test_to_dict_returns_all_fields(self):
+        """to_dict should include all factor fields."""
+        from api.rag_service import RankingFactors
+
+        factors = RankingFactors(
+            semantic_similarity=0.8,
+            location_match=0.9,
+            time_relevance=0.7,
+            category_match=0.5,
+            popularity=0.5,
+            distance_miles=2.5,
+            days_until_event=3.0,
+        )
+        result = factors.to_dict()
+
+        self.assertEqual(result['semantic_similarity'], 0.8)
+        self.assertEqual(result['location_match'], 0.9)
+        self.assertEqual(result['distance_miles'], 2.5)
+        self.assertEqual(result['days_until_event'], 3.0)
+
+
+class RAGResultTest(TestCase):
+    """Test RAGResult dataclass."""
+
+    def test_all_events_combines_tiers(self):
+        """all_events should combine all tiers in order."""
+        from api.rag_service import RAGResult, RankedEvent, RankingFactors
+
+        factors = RankingFactors()
+
+        recommended = [
+            RankedEvent({'id': 1, 'title': 'A'}, 0.9, factors, 'recommended'),
+            RankedEvent({'id': 2, 'title': 'B'}, 0.85, factors, 'recommended'),
+        ]
+        additional = [
+            RankedEvent({'id': 3, 'title': 'C'}, 0.7, factors, 'additional'),
+        ]
+        context = [
+            RankedEvent({'id': 4, 'title': 'D'}, 0.5, factors, 'context'),
+        ]
+
+        result = RAGResult(
+            recommended_events=recommended,
+            additional_events=additional,
+            context_events=context,
+            total_considered=10,
+        )
+
+        self.assertEqual(len(result.all_events), 4)
+        self.assertEqual(result.all_events[0].event_data['id'], 1)
+        self.assertEqual(result.all_events[2].event_data['id'], 3)
+        self.assertEqual(result.all_events[3].event_data['id'], 4)
+
+    def test_recommended_ids_extracts_ids(self):
+        """recommended_ids should return list of IDs."""
+        from api.rag_service import RAGResult, RankedEvent, RankingFactors
+
+        factors = RankingFactors()
+        recommended = [
+            RankedEvent({'id': 10, 'title': 'X'}, 0.9, factors, 'recommended'),
+            RankedEvent({'id': 20, 'title': 'Y'}, 0.85, factors, 'recommended'),
+        ]
+
+        result = RAGResult(recommended_events=recommended, total_considered=5)
+
+        self.assertEqual(result.recommended_ids, [10, 20])
+
+    def test_to_legacy_format(self):
+        """to_legacy_format should return list of event dicts."""
+        from api.rag_service import RAGResult, RankedEvent, RankingFactors
+
+        factors = RankingFactors()
+        recommended = [
+            RankedEvent({'id': 1, 'title': 'A'}, 0.9, factors, 'recommended'),
+        ]
+        additional = [
+            RankedEvent({'id': 2, 'title': 'B'}, 0.7, factors, 'additional'),
+        ]
+        context = [
+            RankedEvent({'id': 3, 'title': 'C'}, 0.5, factors, 'context'),
+        ]
+
+        result = RAGResult(
+            recommended_events=recommended,
+            additional_events=additional,
+            context_events=context,
+        )
+        legacy = result.to_legacy_format()
+
+        # Should include recommended + additional, not context
+        self.assertEqual(len(legacy), 2)
+        self.assertEqual(legacy[0]['id'], 1)
+        self.assertEqual(legacy[1]['id'], 2)
+
+
+class TieredRetrievalTest(TestCase):
+    """Test tiered retrieval with multi-factor scoring."""
+
+    def setUp(self):
+        """Create test events with locations."""
+        from locations.models import Location
+
+        # Create a test location
+        self.newton = Location.objects.create(
+            geoid='2547100',
+            name='Newton',
+            normalized_name='newton',
+            state='MA',
+            latitude=42.337807,
+            longitude=-71.209182,
+            population=88923,
+        )
+
+        # Create venue near Newton
+        self.venue = baker.make(
+            Venue,
+            name='Newton Library',
+            city='Newton',
+            state='MA',
+            latitude=42.338,
+            longitude=-71.210,
+        )
+
+        # Create future events
+        self.event1 = baker.make(
+            Event,
+            title='Kids Storytime',
+            description='A fun storytime for children',
+            venue=self.venue,
+            start_time=timezone.now() + timedelta(days=1),
+            metadata_tags=['kids', 'story'],
+        )
+        self.event2 = baker.make(
+            Event,
+            title='Adult Book Club',
+            description='Monthly book discussion',
+            venue=self.venue,
+            start_time=timezone.now() + timedelta(days=7),
+            metadata_tags=['adults', 'books'],
+        )
+
+    @patch('api.embedding_client.EmbeddingClient.encode')
+    def test_tiered_retrieval_with_location_id(self, mock_encode):
+        """Tiered retrieval should resolve location from ID."""
+        from api.rag_service import EventRAGService
+
+        mock_encode.return_value = np.array([0.1] * 384)
+        rag = EventRAGService()
+
+        # Mock semantic search to return our events
+        with patch.object(rag, 'semantic_search') as mock_search:
+            mock_search.return_value = [
+                (self.event1, 0.8),
+                (self.event2, 0.6),
+            ]
+
+            result = rag.get_context_events_tiered(
+                user_message='activities for kids',
+                location_id=self.newton.id,
+                max_recommended=1,
+                max_additional=1,
+                max_context=5,
+            )
+
+            # Should have tiered results
+            self.assertEqual(len(result.recommended_events), 1)
+            self.assertEqual(len(result.additional_events), 1)
+            self.assertEqual(result.recommended_events[0].event_data['id'], self.event1.id)
+
+    @patch('api.embedding_client.EmbeddingClient.encode')
+    def test_tiered_retrieval_with_custom_weights(self, mock_encode):
+        """Tiered retrieval should use custom scoring weights."""
+        from api.rag_service import EventRAGService, ScoringWeights
+
+        mock_encode.return_value = np.array([0.1] * 384)
+        rag = EventRAGService()
+
+        # Custom weights emphasizing location
+        weights = ScoringWeights(
+            semantic_similarity=0.2,
+            location_match=0.5,
+            time_relevance=0.2,
+            category_match=0.05,
+            popularity=0.05,
+        )
+
+        with patch.object(rag, 'semantic_search') as mock_search:
+            mock_search.return_value = [
+                (self.event1, 0.8),
+                (self.event2, 0.6),
+            ]
+
+            result = rag.get_context_events_tiered(
+                user_message='activities',
+                scoring_weights=weights,
+                max_recommended=2,
+            )
+
+            # Verify weights were used in search metadata
+            self.assertEqual(result.search_metadata['weights']['location_match'], 0.5)
+            self.assertEqual(result.search_metadata['weights']['semantic_similarity'], 0.2)

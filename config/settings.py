@@ -248,6 +248,11 @@ AWS_BEDROCK_BACKUP_MODEL_ID = os.environ.get(
     "AWS_BEDROCK_BACKUP_MODEL_ID", "anthropic.claude-3-sonnet-20240229-v1:0"
 )
 
+# Embedding service configuration
+# Set EMBEDDING_SERVICE_URL to use the embedding microservice (recommended for production)
+# Leave unset to load sentence-transformers locally (for development)
+EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")  # e.g., "http://localhost:8003"
+
 # Logging Configuration
 LOGGING = {
     'version': 1,

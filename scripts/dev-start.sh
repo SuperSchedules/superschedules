@@ -36,6 +36,7 @@ done
 # Service ports
 DJANGO_PORT=8000
 CHAT_PORT=8002
+EMBEDDING_PORT=8003
 FRONTEND_PORT=5173
 
 # PID file for cleanup
@@ -205,13 +206,34 @@ start_django() {
     fi
 }
 
+start_embedding_service() {
+    print_status "Embedding Service" "starting" "Starting embedding microservice..."
+
+    cd "$BASE_DIR"
+    source .venv/bin/activate
+
+    # Start embedding service (single worker to share model)
+    python -m uvicorn embedding_service.app:app --host 0.0.0.0 --port $EMBEDDING_PORT --workers 1 >> "$LOG_DIR/embedding.log" 2>&1 &
+    local pid=$!
+    echo "$pid" >> "$PID_FILE"
+
+    if wait_for_service "http://localhost:$EMBEDDING_PORT/health" "Embedding Service"; then
+        print_status "Embedding Service" "success" "Running on http://localhost:$EMBEDDING_PORT"
+        # Export URL for other services to use
+        export EMBEDDING_SERVICE_URL="http://localhost:$EMBEDDING_PORT"
+        return 0
+    else
+        return 1
+    fi
+}
+
 start_chat_service() {
     print_status "Chat Service" "starting" "Starting FastAPI chat service..."
 
     cd "$BASE_DIR"
     source .venv/bin/activate
 
-    python -m uvicorn chat_service.app:app --host 0.0.0.0 --port $CHAT_PORT >/dev/null 2>&1 &
+    python -m uvicorn chat_service.app:app --host 0.0.0.0 --port $CHAT_PORT >> "$LOG_DIR/chat.log" 2>&1 &
     local pid=$!
     echo "$pid" >> "$PID_FILE"
 
@@ -262,11 +284,14 @@ start_frontend() {
 print_dashboard() {
     echo -e "\n${GREEN}🎉 All services started successfully!${NC}\n"
     echo -e "${BLUE}📊 Service Dashboard:${NC}"
-    echo -e "  Frontend:     http://localhost:$FRONTEND_PORT"
-    echo -e "  Django API:   http://localhost:$DJANGO_PORT"
-    echo -e "  Chat Service: http://localhost:$CHAT_PORT"
+    echo -e "  Frontend:          http://localhost:$FRONTEND_PORT"
+    echo -e "  Django API:        http://localhost:$DJANGO_PORT"
+    echo -e "  Chat Service:      http://localhost:$CHAT_PORT"
+    echo -e "  Embedding Service: http://localhost:$EMBEDDING_PORT"
     echo -e "\n${BLUE}📋 Service logs: $LOG_DIR/${NC}"
     echo -e "  tail -f $LOG_DIR/django.log"
+    echo -e "  tail -f $LOG_DIR/embedding.log"
+    echo -e "  tail -f $LOG_DIR/chat.log"
     echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}\n"
 }
 
@@ -281,6 +306,7 @@ main() {
     if ! check_postgresql; then exit 1; fi
     if ! check_ollama; then exit 1; fi
     if ! start_django; then exit 1; fi
+    if ! start_embedding_service; then exit 1; fi  # Must start before chat service
     if ! start_chat_service; then exit 1; fi
     if ! start_frontend; then exit 1; fi
 

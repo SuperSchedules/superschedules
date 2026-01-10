@@ -86,13 +86,15 @@ class HealthAggregator:
             from api.rag_service import get_rag_service
             rag = get_rag_service()
 
-            # Check if we can get the model (doesn't make network call)
-            model_name = rag.model_name if hasattr(rag, 'model_name') else "unknown"
+            # Check embedding client health
+            health = rag.embedding_client.health_check()
 
             return {
                 "status": "healthy",
                 "details": {
-                    "model": model_name,
+                    "embedding_mode": health.get("mode", "unknown"),
+                    "embedding_service_url": health.get("service_url"),
+                    "model": health.get("model_name", "all-MiniLM-L6-v2"),
                     "ready": True
                 }
             }

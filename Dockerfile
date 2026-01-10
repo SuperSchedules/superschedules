@@ -31,10 +31,11 @@ ARG GIT_COMMIT
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install only runtime dependencies (including libcurl for pycurl/SQS)
+# Install only runtime dependencies (including libcurl for pycurl/SQS, curl for healthchecks)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     libcurl4 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
