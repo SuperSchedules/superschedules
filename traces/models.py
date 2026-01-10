@@ -77,6 +77,23 @@ class ChatDebugEvent(models.Model):
         ('error', 'Error'),
     ]
 
+    ERROR_TYPE_CHOICES = [
+        ('rag_error', 'RAG Error'),
+        ('llm_error', 'LLM Error'),
+        ('location_error', 'Location Error'),
+        ('validation_error', 'Validation Error'),
+        ('timeout_error', 'Timeout Error'),
+        ('auth_error', 'Auth Error'),
+        ('unknown', 'Unknown'),
+    ]
+
+    ERROR_SEVERITY_CHOICES = [
+        ('critical', 'Critical'),
+        ('error', 'Error'),
+        ('warning', 'Warning'),
+        ('info', 'Info'),
+    ]
+
     id = models.BigAutoField(primary_key=True)
     run = models.ForeignKey(ChatDebugRun, on_delete=models.CASCADE, related_name='events')
     seq = models.PositiveIntegerField(help_text='Sequence number for ordering')
@@ -84,6 +101,10 @@ class ChatDebugEvent(models.Model):
     stage = models.CharField(max_length=30, choices=STAGE_CHOICES)
     data = models.JSONField(help_text='Full payload for this stage')
     latency_ms = models.IntegerField(null=True, blank=True, help_text='Time taken for this stage')
+
+    # Error classification (only populated when stage='error')
+    error_type = models.CharField(max_length=30, choices=ERROR_TYPE_CHOICES, null=True, blank=True)
+    error_severity = models.CharField(max_length=20, choices=ERROR_SEVERITY_CHOICES, null=True, blank=True, default='error')
 
     class Meta:
         ordering = ['seq']

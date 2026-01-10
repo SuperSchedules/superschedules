@@ -58,7 +58,14 @@ class TraceRecorder:
         self._start_time = time.time()
         self._run_updated = False
 
-    def event(self, stage: str, data: dict, latency_ms: int = None) -> dict:
+    def event(
+        self,
+        stage: str,
+        data: dict,
+        latency_ms: int = None,
+        error_type: str = None,
+        error_severity: str = None,
+    ) -> dict:
         """
         Record a trace event.
 
@@ -66,6 +73,8 @@ class TraceRecorder:
             stage: Event stage (input, retrieval, context_block, etc.)
             data: Event payload data
             latency_ms: Optional latency measurement in milliseconds
+            error_type: For error events: 'rag_error', 'llm_error', 'location_error', etc.
+            error_severity: For error events: 'critical', 'error', 'warning', 'info'
 
         Returns:
             The recorded event dict
@@ -77,6 +86,8 @@ class TraceRecorder:
             'data': data,
             'latency_ms': latency_ms,
             'timestamp': time.time(),
+            'error_type': error_type,
+            'error_severity': error_severity,
         }
         self.events.append(event)
 
@@ -160,6 +171,8 @@ class TraceRecorder:
                 stage=event['stage'],
                 data=event['data'],
                 latency_ms=event['latency_ms'],
+                error_type=event.get('error_type'),
+                error_severity=event.get('error_severity'),
             )
         except Exception as e:
             logger.error(f'Failed to persist trace event: {e}')
@@ -196,7 +209,14 @@ class TraceRecorder:
         """Get total elapsed time since recorder was created."""
         return int((time.time() - self._start_time) * 1000)
 
-    async def event_async(self, stage: str, data: dict, latency_ms: int = None) -> dict:
+    async def event_async(
+        self,
+        stage: str,
+        data: dict,
+        latency_ms: int = None,
+        error_type: str = None,
+        error_severity: str = None,
+    ) -> dict:
         """
         Record a trace event from async context.
 
@@ -207,6 +227,8 @@ class TraceRecorder:
             stage: Event stage (input, retrieval, context_block, etc.)
             data: Event payload data
             latency_ms: Optional latency measurement in milliseconds
+            error_type: For error events: 'rag_error', 'llm_error', 'location_error', etc.
+            error_severity: For error events: 'critical', 'error', 'warning', 'info'
 
         Returns:
             The recorded event dict
@@ -215,7 +237,7 @@ class TraceRecorder:
 
         @sync_to_async
         def _record_event():
-            return self.event(stage, data, latency_ms)
+            return self.event(stage, data, latency_ms, error_type, error_severity)
 
         return await _record_event()
 
@@ -249,7 +271,7 @@ class NullRecorder:
     All methods are no-ops, so code can unconditionally call trace methods.
     """
 
-    def event(self, stage: str, data: dict, latency_ms: int = None) -> None:
+    def event(self, stage: str, data: dict, latency_ms: int = None, error_type: str = None, error_severity: str = None) -> None:
         pass
 
     @contextmanager

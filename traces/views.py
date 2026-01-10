@@ -412,7 +412,9 @@ def get_run_events(request, run_id):
     except (ValueError, ChatDebugRun.DoesNotExist):
         return HttpResponseBadRequest('Invalid run_id')
 
-    events = list(run.events.order_by('seq').values('seq', 'stage', 'data', 'latency_ms'))
+    events = list(run.events.order_by('seq').values(
+        'seq', 'stage', 'data', 'latency_ms', 'error_type', 'error_severity'
+    ))
 
     return JsonResponse({
         'run_id': str(run.id),
@@ -421,6 +423,8 @@ def get_run_events(request, run_id):
         'status': run.status,
         'final_answer_text': run.final_answer_text,
         'total_latency_ms': run.total_latency_ms,
+        'error_message': run.error_message,
+        'error_stack': run.error_stack,
         'diagnostics': run.diagnostics,
         'events': events,
     })

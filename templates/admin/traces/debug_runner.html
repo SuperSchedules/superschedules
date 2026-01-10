@@ -285,6 +285,7 @@
             <button class="tab-btn" data-tab="context">Context Blocks</button>
             <button class="tab-btn" data-tab="prompt">Final Prompt</button>
             <button class="tab-btn" data-tab="diagnostics">Diagnostics</button>
+            <button class="tab-btn" data-tab="errors">Errors</button>
             <button class="tab-btn" data-tab="response-quality">Response Quality</button>
         </div>
 
@@ -345,6 +346,15 @@
             <div id="diagnostics-panel" class="diagnostics-panel">
                 <div id="diagnostics-warnings"></div>
                 <div id="diagnostics-stats" class="stats-grid"></div>
+            </div>
+        </div>
+
+        <!-- Errors Tab -->
+        <div id="tab-errors" class="tab-content">
+            <h3>Errors &amp; Warnings</h3>
+            <div id="errors-panel">
+                <div id="run-error-section" style="margin-bottom: 20px;"></div>
+                <div id="event-errors-section"></div>
             </div>
         </div>
 
@@ -500,6 +510,7 @@ document.addEventListener('DOMContentLoaded', function() {
             renderContextBlocks(data.events);
             renderPrompt(data.events);
             renderDiagnostics(data.diagnostics);
+            renderErrors(data);
 
             // Show results
             resultsSection.classList.remove('hidden');
@@ -693,6 +704,7 @@ document.addEventListener('DOMContentLoaded', function() {
             renderContextBlocks(data.events);
             renderPrompt(data.events);
             renderDiagnostics(data.diagnostics);
+            renderErrors(data);
         } catch (error) {
             console.error('Failed to load run data:', error);
         }
@@ -895,6 +907,107 @@ ${escapeHtml(data.user_prompt || '')}
 
         // Response Quality
         renderResponseQuality(diagnostics.response_quality);
+    }
+
+    function renderErrors(data) {
+        const events = data.events || [];
+        const errorEvents = events.filter(e => e.stage === 'error');
+        const hasRunError = data.status === 'error' && data.error_message;
+        const errorCount = errorEvents.length + (hasRunError ? 1 : 0);
+
+        // Update error tab button with badge
+        const errorTabBtn = document.querySelector('[data-tab="errors"]');
+        if (errorCount > 0) {
+            errorTabBtn.innerHTML = `Errors <span style="background:#dc3545;color:white;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:4px;">${errorCount}</span>`;
+        } else {
+            errorTabBtn.textContent = 'Errors';
+        }
+
+        // Run-level error section
+        const runErrorSection = document.getElementById('run-error-section');
+        if (hasRunError) {
+            runErrorSection.innerHTML = `
+                <div style="background:#f8d7da;border:1px solid #f5c6cb;border-radius:4px;padding:15px;margin-bottom:15px;">
+                    <h4 style="color:#721c24;margin-top:0;">
+                        <span style="margin-right:8px;">⚠️</span>Run Failed
+                    </h4>
+                    <div style="margin-bottom:10px;">
+                        <strong>Error:</strong> ${escapeHtml(data.error_message)}
+                    </div>
+                    ${data.error_stack ? `
+                    <details>
+                        <summary style="cursor:pointer;color:#721c24;font-weight:500;">Stack Trace</summary>
+                        <pre style="background:#fff;padding:10px;border-radius:4px;margin-top:10px;font-size:11px;overflow-x:auto;max-height:300px;overflow-y:auto;">${escapeHtml(data.error_stack)}</pre>
+                    </details>
+                    ` : ''}
+                </div>
+            `;
+        } else {
+            runErrorSection.innerHTML = '';
+        }
+
+        // Event-level errors section
+        const eventErrorsSection = document.getElementById('event-errors-section');
+        if (errorEvents.length > 0) {
+            let html = '<h4>Pipeline Errors</h4>';
+            html += '<div style="display:flex;flex-direction:column;gap:10px;">';
+
+            errorEvents.forEach((event, i) => {
+                const errData = event.data || {};
+                const severity = event.error_severity || 'error';
+                const errType = event.error_type || 'unknown';
+
+                // Severity colors
+                const severityColors = {
+                    critical: { bg: '#f8d7da', border: '#f5c6cb', text: '#721c24' },
+                    error: { bg: '#f8d7da', border: '#f5c6cb', text: '#721c24' },
+                    warning: { bg: '#fff3cd', border: '#ffeeba', text: '#856404' },
+                    info: { bg: '#d1ecf1', border: '#bee5eb', text: '#0c5460' },
+                };
+                const colors = severityColors[severity] || severityColors.error;
+
+                // Type labels
+                const typeLabels = {
+                    rag_error: 'RAG Error',
+                    llm_error: 'LLM Error',
+                    location_error: 'Location Error',
+                    validation_error: 'Validation Error',
+                    timeout_error: 'Timeout Error',
+                    auth_error: 'Auth Error',
+                    unknown: 'Unknown Error',
+                };
+                const typeLabel = typeLabels[errType] || errType;
+
+                html += `
+                    <div style="background:${colors.bg};border:1px solid ${colors.border};border-radius:4px;padding:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span style="color:${colors.text};font-weight:600;">
+                                ${typeLabel}
+                                <span style="font-weight:normal;font-size:12px;margin-left:8px;">(${severity})</span>
+                            </span>
+                            ${event.latency_ms ? `<span style="font-size:11px;color:#666;">at ${event.latency_ms}ms</span>` : ''}
+                        </div>
+                        <div style="color:${colors.text};">
+                            ${escapeHtml(errData.message || errData.error || 'No message')}
+                        </div>
+                        ${errData.stage ? `<div style="font-size:11px;color:#666;margin-top:4px;">Stage: ${errData.stage}</div>` : ''}
+                        ${errData.stack ? `
+                        <details style="margin-top:8px;">
+                            <summary style="cursor:pointer;color:${colors.text};font-size:12px;">Stack Trace</summary>
+                            <pre style="background:#fff;padding:8px;border-radius:4px;margin-top:6px;font-size:10px;overflow-x:auto;max-height:200px;overflow-y:auto;">${escapeHtml(errData.stack)}</pre>
+                        </details>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            eventErrorsSection.innerHTML = html;
+        } else if (!hasRunError) {
+            eventErrorsSection.innerHTML = '<p style="color:#28a745;"><span style="margin-right:8px;">✓</span>No errors detected in this run.</p>';
+        } else {
+            eventErrorsSection.innerHTML = '';
+        }
     }
 
     function renderResponseQuality(rq) {
