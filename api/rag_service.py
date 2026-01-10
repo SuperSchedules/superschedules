@@ -1016,8 +1016,13 @@ class EventRAGService:
                         {
                             'id': e.event_data['id'],
                             'title': e.event_data['title'],
+                            'venue': e.event_data.get('location', ''),
+                            'city': e.event_data.get('city', ''),
+                            'start_time': e.event_data.get('start_time'),
                             'tier': e.tier,
                             'final_score': round(e.final_score, 3),
+                            'similarity_score': e.ranking_factors.semantic_similarity,
+                            'above_threshold': True,  # All scored events are above threshold
                             'factors': e.ranking_factors.to_dict(),
                         }
                         for e in result.all_events[:30]  # Top 30 for trace
