@@ -78,6 +78,46 @@ class VenueSchema(ModelSchema):
         fields = ["id", "name", "street_address", "city", "state", "postal_code", "latitude", "longitude"]
 
 
+class VenueEnrichmentSchema(ModelSchema):
+    """Venue data for enrichment API - includes enrichment fields."""
+    class Meta:
+        model = Venue
+        fields = [
+            "id", "name", "street_address", "city", "state", "postal_code",
+            "venue_kind", "website_url", "description", "kids_summary",
+            "enrichment_status", "last_enriched_at"
+        ]
+
+
+class VenueEnrichmentListSchema(Schema):
+    """Response schema for needing-enrichment endpoint."""
+    venues: List[VenueEnrichmentSchema]
+    total_count: int
+
+
+class VenueEnrichmentUpdateSchema(Schema):
+    """Schema for PATCH /api/venues/{id}/ enrichment updates."""
+    website_url: str | None = None
+    website_url_confidence: float | None = None
+    description: str | None = None
+    kids_summary: str | None = None
+    enrichment_status: str | None = None
+
+
+class VenueEventSchema(Schema):
+    """Simplified event schema for venue context."""
+    id: int
+    title: str
+    description: str
+    start: datetime
+    organizer: str | None = None
+
+
+class VenueEventsResponseSchema(Schema):
+    """Response schema for venue events endpoint."""
+    events: List[VenueEventSchema]
+
+
 class EventSchema(ModelSchema):
     venue: VenueSchema | None = None
     room_name: str = ""
@@ -1272,3 +1312,111 @@ def get_session_history_for_llm(request, session_id: int, limit: int = 10):
         "session_id": session_id,
         "messages": [{"role": msg.role, "content": msg.content} for msg in messages]
     }
+
+
+# =============================================================================
+# Venue Enrichment API - For Collector Service
+# =============================================================================
+
+@router.get("/venues/needing-enrichment", auth=ServiceTokenAuth(), response=VenueEnrichmentListSchema)
+def get_venues_needing_enrichment(
+    request,
+    limit: int = Query(50, description="Max venues to return"),
+    missing: str | None = Query(None, description="Filter by missing field: website_url, description, kids_summary"),
+):
+    """
+    Returns venues that need Phase 2 enrichment.
+    Prioritizes venues with venue_kind set (Phase 1 complete) and more events.
+    """
+    from django.db.models import Count
+
+    # Base query: venues with Phase 1 complete (has venue_kind)
+    qs = Venue.objects.exclude(venue_kind__isnull=True).exclude(venue_kind='').exclude(venue_kind='unknown')
+
+    # Filter by specific missing field or any missing enrichment data
+    if missing == 'website_url':
+        qs = qs.filter(Q(website_url__isnull=True) | Q(website_url=''))
+    elif missing == 'description':
+        qs = qs.filter(description='')
+    elif missing == 'kids_summary':
+        qs = qs.filter(kids_summary='')
+    else:
+        # Default: any missing enrichment field
+        qs = qs.filter(
+            Q(website_url__isnull=True) | Q(website_url='') |
+            Q(description='') |
+            Q(kids_summary='')
+        )
+
+    # Annotate with event count and order by most events first (richer context)
+    qs = qs.annotate(event_count=Count('events')).order_by('-event_count', '-created_at')
+
+    total_count = qs.count()
+    venues = list(qs[:limit])
+
+    return {"venues": venues, "total_count": total_count}
+
+
+@router.get("/venues/{venue_id}/events", auth=ServiceTokenAuth(), response=VenueEventsResponseSchema)
+def get_venue_events(
+    request,
+    venue_id: int,
+    limit: int = Query(20, description="Max events to return"),
+    future_only: bool = Query(False, description="Only include future events"),
+):
+    """
+    Returns recent events at a specific venue for LLM context during enrichment.
+    Returns mix of recent past events and upcoming events.
+    """
+    venue = get_object_or_404(Venue, id=venue_id)
+
+    qs = Event.objects.filter(venue=venue)
+
+    if future_only:
+        qs = qs.filter(start_time__gte=timezone.now())
+    else:
+        # Get mix of recent past and future events
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        qs = qs.filter(start_time__gte=thirty_days_ago)
+
+    # Order by date descending (most recent first)
+    qs = qs.order_by('-start_time')[:limit]
+
+    events = [
+        {
+            "id": e.id,
+            "title": e.title,
+            "description": e.description,
+            "start": e.start_time,
+            "organizer": e.organizer or None,
+        }
+        for e in qs
+    ]
+
+    return {"events": events}
+
+
+@router.patch("/venues/{venue_id}", auth=ServiceTokenAuth(), response=VenueEnrichmentSchema)
+def update_venue_enrichment(request, venue_id: int, payload: VenueEnrichmentUpdateSchema):
+    """
+    Updates venue with enrichment results from collector service.
+    Only updates provided fields (partial update).
+    """
+    venue = get_object_or_404(Venue, id=venue_id)
+
+    update_fields = []
+    data = payload.dict(exclude_unset=True)
+
+    for field, value in data.items():
+        if value is not None:
+            setattr(venue, field, value)
+            update_fields.append(field)
+
+    # Always update last_enriched_at if any enrichment data was provided
+    if update_fields:
+        venue.last_enriched_at = timezone.now()
+        update_fields.append('last_enriched_at')
+        venue.save(update_fields=update_fields)
+        logger.info(f"Venue {venue_id} enriched: updated {update_fields}")
+
+    return venue

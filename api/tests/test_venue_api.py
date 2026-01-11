@@ -2,14 +2,16 @@
 Tests for venue data in API responses.
 
 Ensures EventSchema properly serializes venue objects for frontend consumption.
+Also tests venue enrichment API endpoints.
 """
 
+import json
 from django.test import TestCase
 from django.utils import timezone
 from datetime import timedelta
 from model_bakery import baker
 
-from events.models import Event, Source
+from events.models import Event, Source, ServiceToken
 from venues.models import Venue
 from api.views import EventSchema, VenueSchema
 
@@ -163,3 +165,242 @@ class EventSchemaVenueTest(TestCase):
         self.assertIn("venue", event)
         self.assertEqual(event["venue"]["name"], "Newton Free Library")
         self.assertEqual(event["room_name"], "Children's Room")
+
+
+class VenueEnrichmentAPITest(TestCase):
+    """Tests for venue enrichment API endpoints."""
+
+    def setUp(self):
+        self.service_token = baker.make(ServiceToken)
+        self.source = baker.make(Source)
+
+        # Venue with venue_kind but missing enrichment (needs enrichment)
+        self.venue_needing_enrichment = baker.make(
+            Venue,
+            name="Newton Free Library",
+            city="Newton",
+            state="MA",
+            venue_kind="library",
+            website_url=None,
+            description="",
+            kids_summary="",
+        )
+
+        # Venue already enriched
+        self.venue_enriched = baker.make(
+            Venue,
+            name="Waltham Library",
+            city="Waltham",
+            state="MA",
+            venue_kind="library",
+            website_url="https://waltham.lib",
+            description="A great library",
+            kids_summary="Kids love it",
+        )
+
+        # Venue without venue_kind (Phase 1 incomplete)
+        self.venue_no_kind = baker.make(
+            Venue,
+            name="Unknown Place",
+            city="Boston",
+            state="MA",
+            venue_kind=None,
+            website_url=None,
+            description="",
+            kids_summary="",
+        )
+
+        # Create events at the venue
+        for i in range(3):
+            baker.make(
+                Event,
+                title=f"Event {i}",
+                description=f"Description {i}",
+                venue=self.venue_needing_enrichment,
+                source=self.source,
+                start_time=timezone.now() + timedelta(days=i),
+            )
+
+    def test_get_venues_needing_enrichment_returns_venues(self):
+        """Test /api/venues/needing-enrichment returns venues missing enrichment data."""
+        response = self.client.get(
+            "/api/v1/venues/needing-enrichment",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIn("venues", data)
+        self.assertIn("total_count", data)
+        self.assertGreaterEqual(data["total_count"], 1)
+
+        # Should include venue needing enrichment
+        venue_ids = [v["id"] for v in data["venues"]]
+        self.assertIn(self.venue_needing_enrichment.id, venue_ids)
+
+        # Should NOT include venue with venue_kind=None
+        self.assertNotIn(self.venue_no_kind.id, venue_ids)
+
+    def test_get_venues_needing_enrichment_excludes_fully_enriched(self):
+        """Test endpoint excludes venues that are already enriched."""
+        response = self.client.get(
+            "/api/v1/venues/needing-enrichment",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        data = response.json()
+        venue_ids = [v["id"] for v in data["venues"]]
+
+        # Fully enriched venue should not be included
+        self.assertNotIn(self.venue_enriched.id, venue_ids)
+
+    def test_get_venues_needing_enrichment_filter_by_missing_field(self):
+        """Test filtering by specific missing field."""
+        response = self.client.get(
+            "/api/v1/venues/needing-enrichment?missing=website_url",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        # All returned venues should have missing website_url
+        for venue in data["venues"]:
+            self.assertTrue(venue["website_url"] is None or venue["website_url"] == "")
+
+    def test_get_venues_needing_enrichment_respects_limit(self):
+        """Test limit parameter works correctly."""
+        response = self.client.get(
+            "/api/v1/venues/needing-enrichment?limit=1",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertLessEqual(len(data["venues"]), 1)
+
+    def test_get_venues_needing_enrichment_requires_auth(self):
+        """Test endpoint requires service token authentication."""
+        response = self.client.get("/api/v1/venues/needing-enrichment")
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_venue_events_returns_events(self):
+        """Test /api/venues/{id}/events returns events at venue."""
+        response = self.client.get(
+            f"/api/v1/venues/{self.venue_needing_enrichment.id}/events",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIn("events", data)
+        self.assertEqual(len(data["events"]), 3)
+
+        # Check event structure
+        event = data["events"][0]
+        self.assertIn("id", event)
+        self.assertIn("title", event)
+        self.assertIn("description", event)
+        self.assertIn("start", event)
+
+    def test_get_venue_events_respects_limit(self):
+        """Test limit parameter on venue events."""
+        response = self.client.get(
+            f"/api/v1/venues/{self.venue_needing_enrichment.id}/events?limit=2",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["events"]), 2)
+
+    def test_get_venue_events_404_for_invalid_venue(self):
+        """Test 404 for non-existent venue."""
+        response = self.client.get(
+            "/api/v1/venues/99999/events",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_get_venue_events_requires_auth(self):
+        """Test endpoint requires service token authentication."""
+        response = self.client.get(f"/api/v1/venues/{self.venue_needing_enrichment.id}/events")
+        self.assertEqual(response.status_code, 401)
+
+    def test_patch_venue_updates_enrichment_fields(self):
+        """Test PATCH /api/venues/{id} updates enrichment fields."""
+        payload = {
+            "website_url": "https://newtonfreelibrary.net",
+            "website_url_confidence": 0.85,
+            "description": "Newton Free Library serves the Newton community.",
+            "kids_summary": "Offers story times and LEGO club for kids.",
+            "enrichment_status": "complete",
+        }
+
+        response = self.client.patch(
+            f"/api/v1/venues/{self.venue_needing_enrichment.id}",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        # Check response reflects updates
+        self.assertEqual(data["website_url"], "https://newtonfreelibrary.net")
+        self.assertEqual(data["description"], "Newton Free Library serves the Newton community.")
+        self.assertEqual(data["kids_summary"], "Offers story times and LEGO club for kids.")
+        self.assertEqual(data["enrichment_status"], "complete")
+
+        # Verify database was updated
+        self.venue_needing_enrichment.refresh_from_db()
+        self.assertEqual(self.venue_needing_enrichment.website_url, "https://newtonfreelibrary.net")
+        self.assertEqual(self.venue_needing_enrichment.website_url_confidence, 0.85)
+        self.assertIsNotNone(self.venue_needing_enrichment.last_enriched_at)
+
+    def test_patch_venue_partial_update(self):
+        """Test PATCH only updates provided fields."""
+        payload = {"description": "Just updating description"}
+
+        response = self.client.patch(
+            f"/api/v1/venues/{self.venue_needing_enrichment.id}",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.venue_needing_enrichment.refresh_from_db()
+        self.assertEqual(self.venue_needing_enrichment.description, "Just updating description")
+        # Other fields should be unchanged
+        self.assertIsNone(self.venue_needing_enrichment.website_url)
+
+    def test_patch_venue_404_for_invalid_venue(self):
+        """Test 404 for non-existent venue."""
+        payload = {"description": "Test"}
+
+        response = self.client.patch(
+            "/api/v1/venues/99999",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_patch_venue_requires_auth(self):
+        """Test endpoint requires service token authentication."""
+        payload = {"description": "Test"}
+
+        response = self.client.patch(
+            f"/api/v1/venues/{self.venue_needing_enrichment.id}",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
