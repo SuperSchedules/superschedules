@@ -2,6 +2,7 @@
 Tests for Venue model.
 """
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.db import IntegrityError
 from django.utils.text import slugify
@@ -243,3 +244,360 @@ class VenueDeduplicationTests(TestCase):
         venue2, created2 = get_or_create_venue(normalized, "different-domain.com")
         self.assertFalse(created2)
         self.assertEqual(venue1.id, venue2.id)
+
+
+class VenueKindChoicesTests(TestCase):
+    """Tests for venue_kind choices including civic/government types."""
+
+    def test_civic_venue_kinds_exist(self):
+        """Test that civic/government venue kinds are available."""
+        kind_values = [choice[0] for choice in Venue.VENUE_KIND_CHOICES]
+
+        self.assertIn("town_hall", kind_values)
+        self.assertIn("city_hall", kind_values)
+        self.assertIn("government_office", kind_values)
+
+    def test_create_venue_with_civic_kind(self):
+        """Test creating venues with civic/government venue kinds."""
+        venue = Venue.objects.create(
+            name="Newton City Hall",
+            slug="newton-city-hall",
+            city="Newton",
+            state="MA",
+            venue_kind="city_hall"
+        )
+        self.assertEqual(venue.venue_kind, "city_hall")
+
+        venue2 = Venue.objects.create(
+            name="Waltham Town Hall",
+            slug="waltham-town-hall",
+            city="Waltham",
+            state="MA",
+            venue_kind="town_hall"
+        )
+        self.assertEqual(venue2.venue_kind, "town_hall")
+
+
+class VenueAudienceValidationTests(TestCase):
+    """Tests for audience field validation via clean() method."""
+
+    def test_rule_a_adult_only_rejects_kid_groups(self):
+        """Test that min_age >= 18 rejects infant/toddler/child age groups."""
+        venue = Venue(
+            name="Adult Club",
+            slug="adult-club",
+            city="Boston",
+            state="MA",
+            audience_min_age=21,
+            audience_age_groups=["adult", "child"]  # Invalid combo
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            venue.clean()
+
+        self.assertIn("audience_age_groups", ctx.exception.message_dict)
+        self.assertIn("18+", str(ctx.exception))
+
+    def test_rule_a_adult_only_allows_adult_groups(self):
+        """Test that min_age >= 18 allows adult/senior age groups."""
+        venue = Venue(
+            name="Adult Club",
+            slug="adult-club",
+            city="Boston",
+            state="MA",
+            audience_min_age=21,
+            audience_age_groups=["adult", "senior"],
+            audience_primary="adults"
+        )
+
+        # Should not raise
+        venue.clean()
+
+    def test_rule_b_children_primary_requires_kid_groups(self):
+        """Test audience_primary='children' requires kid age groups."""
+        venue = Venue(
+            name="Kids Place",
+            slug="kids-place",
+            city="Boston",
+            state="MA",
+            audience_primary="children",
+            audience_age_groups=["teen", "adult"]  # Missing kid groups
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            venue.clean()
+
+        self.assertIn("audience_primary", ctx.exception.message_dict)
+
+    def test_rule_b_children_primary_accepts_kid_groups(self):
+        """Test audience_primary='children' works with kid age groups."""
+        venue = Venue(
+            name="Kids Place",
+            slug="kids-place",
+            city="Boston",
+            state="MA",
+            audience_primary="children",
+            audience_age_groups=["infant", "toddler", "child"]
+        )
+
+        # Should not raise
+        venue.clean()
+
+    def test_rule_b_families_primary_requires_kid_groups(self):
+        """Test audience_primary='families' requires kid age groups."""
+        venue = Venue(
+            name="Family Center",
+            slug="family-center",
+            city="Boston",
+            state="MA",
+            audience_primary="families",
+            audience_age_groups=["adult"]  # Missing kid groups
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            venue.clean()
+
+        self.assertIn("audience_primary", ctx.exception.message_dict)
+
+    def test_rule_b_families_primary_accepts_kid_groups(self):
+        """Test audience_primary='families' works with kid age groups."""
+        venue = Venue(
+            name="Family Center",
+            slug="family-center",
+            city="Boston",
+            state="MA",
+            audience_primary="families",
+            audience_age_groups=["child", "adult"]
+        )
+
+        # Should not raise
+        venue.clean()
+
+    def test_rule_b_adults_primary_rejects_kid_groups(self):
+        """Test audience_primary='adults' rejects kid age groups."""
+        venue = Venue(
+            name="Adult Venue",
+            slug="adult-venue",
+            city="Boston",
+            state="MA",
+            audience_primary="adults",
+            audience_age_groups=["toddler", "adult"]  # Invalid combo
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            venue.clean()
+
+        self.assertIn("audience_primary", ctx.exception.message_dict)
+
+    def test_rule_b_adults_primary_accepts_adult_groups(self):
+        """Test audience_primary='adults' works with adult/senior groups."""
+        venue = Venue(
+            name="Adult Venue",
+            slug="adult-venue",
+            city="Boston",
+            state="MA",
+            audience_primary="adults",
+            audience_age_groups=["adult", "senior"]
+        )
+
+        # Should not raise
+        venue.clean()
+
+    def test_rule_c_auto_derive_families_from_kid_groups(self):
+        """Test auto-derivation of 'families' from kid age groups."""
+        venue = Venue(
+            name="Library",
+            slug="library",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=["child", "teen", "adult"]
+        )
+
+        venue.clean()
+
+        self.assertEqual(venue.audience_primary, "families")
+
+    def test_rule_c_auto_derive_adults_from_adult_only_groups(self):
+        """Test auto-derivation of 'adults' from adult-only groups."""
+        venue = Venue(
+            name="Bar",
+            slug="bar",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=["adult"]
+        )
+
+        venue.clean()
+
+        self.assertEqual(venue.audience_primary, "adults")
+
+    def test_rule_c_auto_derive_seniors_from_senior_only_groups(self):
+        """Test auto-derivation of 'seniors' from senior-only groups."""
+        venue = Venue(
+            name="Senior Center",
+            slug="senior-center",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=["senior"]
+        )
+
+        venue.clean()
+
+        self.assertEqual(venue.audience_primary, "seniors")
+
+    def test_rule_c_no_change_when_not_general(self):
+        """Test auto-derivation does NOT happen when primary is not 'general'."""
+        venue = Venue(
+            name="Teen Club",
+            slug="teen-club",
+            city="Boston",
+            state="MA",
+            audience_primary="teens",
+            audience_age_groups=["teen", "adult"]
+        )
+
+        venue.clean()
+
+        # Should remain 'teens', not change to something else
+        self.assertEqual(venue.audience_primary, "teens")
+
+    def test_empty_groups_passes_validation(self):
+        """Test that empty age groups with general primary passes validation."""
+        venue = Venue(
+            name="General Venue",
+            slug="general-venue",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=[]
+        )
+
+        # Should not raise
+        venue.clean()
+        self.assertEqual(venue.audience_primary, "general")
+
+
+class VenueSearchPropertiesTests(TestCase):
+    """Tests for is_family_friendly and is_adults_only properties."""
+
+    def test_is_family_friendly_true_for_families_primary(self):
+        """Test is_family_friendly returns True for audience_primary='families'."""
+        venue = Venue(
+            name="Family Center",
+            city="Boston",
+            state="MA",
+            audience_primary="families"
+        )
+        self.assertTrue(venue.is_family_friendly)
+
+    def test_is_family_friendly_true_for_children_primary(self):
+        """Test is_family_friendly returns True for audience_primary='children'."""
+        venue = Venue(
+            name="Kids Zone",
+            city="Boston",
+            state="MA",
+            audience_primary="children"
+        )
+        self.assertTrue(venue.is_family_friendly)
+
+    def test_is_family_friendly_true_for_kid_age_groups(self):
+        """Test is_family_friendly returns True when age groups include kids."""
+        for age_group in ["infant", "toddler", "child"]:
+            with self.subTest(age_group=age_group):
+                venue = Venue(
+                    name="Test Venue",
+                    city="Boston",
+                    state="MA",
+                    audience_primary="general",
+                    audience_age_groups=[age_group, "adult"]
+                )
+                self.assertTrue(venue.is_family_friendly)
+
+    def test_is_family_friendly_true_for_family_friendly_tag(self):
+        """Test is_family_friendly returns True for 'family_friendly' tag."""
+        venue = Venue(
+            name="Restaurant",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=["adult"],
+            audience_tags=["family_friendly"]
+        )
+        self.assertTrue(venue.is_family_friendly)
+
+    def test_is_family_friendly_false_for_adults_only(self):
+        """Test is_family_friendly returns False for adults-only venues."""
+        venue = Venue(
+            name="Bar",
+            city="Boston",
+            state="MA",
+            audience_primary="adults",
+            audience_age_groups=["adult"]
+        )
+        self.assertFalse(venue.is_family_friendly)
+
+    def test_is_family_friendly_false_for_general_without_kids(self):
+        """Test is_family_friendly returns False for general venues without kid indicators."""
+        venue = Venue(
+            name="Office",
+            city="Boston",
+            state="MA",
+            audience_primary="general",
+            audience_age_groups=["adult", "senior"]
+        )
+        self.assertFalse(venue.is_family_friendly)
+
+    def test_is_adults_only_true_for_adults_primary(self):
+        """Test is_adults_only returns True for audience_primary='adults'."""
+        venue = Venue(
+            name="Nightclub",
+            city="Boston",
+            state="MA",
+            audience_primary="adults"
+        )
+        self.assertTrue(venue.is_adults_only)
+
+    def test_is_adults_only_true_for_min_age_18(self):
+        """Test is_adults_only returns True for min_age >= 18."""
+        venue = Venue(
+            name="Casino",
+            city="Boston",
+            state="MA",
+            audience_min_age=21
+        )
+        self.assertTrue(venue.is_adults_only)
+
+    def test_is_adults_only_false_for_family_venue(self):
+        """Test is_adults_only returns False for family venues."""
+        venue = Venue(
+            name="Library",
+            city="Boston",
+            state="MA",
+            audience_primary="families",
+            audience_age_groups=["child", "adult"]
+        )
+        self.assertFalse(venue.is_adults_only)
+
+    def test_is_adults_only_false_for_general_venue(self):
+        """Test is_adults_only returns False for general venues."""
+        venue = Venue(
+            name="Park",
+            city="Boston",
+            state="MA",
+            audience_primary="general"
+        )
+        self.assertFalse(venue.is_adults_only)
+
+    def test_is_adults_only_false_for_min_age_under_18(self):
+        """Test is_adults_only returns False for min_age < 18."""
+        venue = Venue(
+            name="Teen Club",
+            city="Boston",
+            state="MA",
+            audience_min_age=13,
+            audience_primary="teens"
+        )
+        self.assertFalse(venue.is_adults_only)

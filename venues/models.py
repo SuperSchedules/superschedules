@@ -5,6 +5,7 @@ Provides deduplication and normalization for event venues,
 plus enrichment fields for classification, audience, and content.
 """
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
 
@@ -38,6 +39,11 @@ class Venue(models.Model):
         ("nature_center", "Nature Center"),
         ("zoo", "Zoo"),
         ("aquarium", "Aquarium"),
+        # Civic/Government
+        ("town_hall", "Town Hall"),
+        ("city_hall", "City Hall"),
+        ("government_office", "Government Office"),
+        # Catch-alls
         ("other", "Other"),
         ("unknown", "Unknown"),
     ]
@@ -51,10 +57,12 @@ class Venue(models.Model):
     ]
 
     AUDIENCE_PRIMARY_CHOICES = [
-        ("children", "Children"),
-        ("dogs", "Dogs"),
-        ("senior", "Senior"),
-        ("general", "General"),
+        ("general", "General"),  # All ages welcome
+        ("families", "Families"),  # Family-oriented
+        ("children", "Children"),  # Primarily for kids
+        ("teens", "Teens"),  # Teen-focused
+        ("adults", "Adults"),  # Adults only (18+)
+        ("seniors", "Seniors"),  # Senior-focused
     ]
 
     ENRICHMENT_STATUS_CHOICES = [
@@ -141,6 +149,96 @@ class Venue(models.Model):
         if not self.slug and self.name:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+    def clean(self):
+        """
+        Validate audience field consistency.
+
+        Enforces rules:
+        - Rule A: Adult-only venues (min_age >= 18) cannot have kid age groups
+        - Rule B: audience_primary must be compatible with audience_age_groups
+        - Rule C: Auto-derive audience_primary from age_groups when set to "general"
+        """
+        super().clean()
+
+        groups = set(self.audience_age_groups or [])
+        min_age = self.audience_min_age
+        primary = self.audience_primary
+
+        kid_groups = {"infant", "toddler", "child"}
+
+        # Rule A: adult-only vs kid groups
+        if min_age is not None and min_age >= 18:
+            if groups & kid_groups:
+                raise ValidationError({
+                    "audience_age_groups": "Cannot include infant/toddler/child when minimum age is 18+."
+                })
+
+        # Rule B: audience_primary compatibility
+        if primary == "children":
+            if not (groups & kid_groups):
+                raise ValidationError({
+                    "audience_primary": "Primary audience 'children' requires at least one of: infant, toddler, child in age groups."
+                })
+
+        if primary == "families":
+            if not (groups & kid_groups):
+                raise ValidationError({
+                    "audience_primary": "Primary audience 'families' requires at least one of: infant, toddler, child in age groups."
+                })
+
+        if primary == "adults":
+            if groups & kid_groups:
+                raise ValidationError({
+                    "audience_primary": "Primary audience 'adults' cannot have infant/toddler/child in age groups."
+                })
+
+        # Rule C: auto-derive audience_primary from groups when "general"
+        if primary == "general" and groups:
+            if groups & kid_groups:
+                self.audience_primary = "families"
+            elif groups == {"adult"}:
+                self.audience_primary = "adults"
+            elif groups == {"senior"}:
+                self.audience_primary = "seniors"
+
+    @property
+    def is_family_friendly(self) -> bool:
+        """
+        Check if venue is suitable for families with children.
+
+        Used by search/recommendation code to include venues for kid-focused queries.
+        Returns True if:
+        - audience_primary is 'families' or 'children'
+        - audience_age_groups contains infant, toddler, or child
+        - audience_tags contains 'family_friendly'
+        """
+        groups = set(self.audience_age_groups or [])
+        tags = set(self.audience_tags or [])
+
+        if self.audience_primary in ("families", "children"):
+            return True
+        if groups & {"infant", "toddler", "child"}:
+            return True
+        if "family_friendly" in tags:
+            return True
+        return False
+
+    @property
+    def is_adults_only(self) -> bool:
+        """
+        Check if venue is restricted to adults (18+).
+
+        Used by search/recommendation code to exclude venues from family queries.
+        Returns True if:
+        - audience_primary is 'adults'
+        - audience_min_age is 18 or higher
+        """
+        if self.audience_primary == "adults":
+            return True
+        if self.audience_min_age is not None and self.audience_min_age >= 18:
+            return True
+        return False
 
 
 class VenueHours(models.Model):

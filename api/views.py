@@ -97,6 +97,15 @@ class VenueEnrichmentListSchema(Schema):
 
 class VenueEnrichmentUpdateSchema(Schema):
     """Schema for PATCH /api/venues/{id}/ enrichment updates."""
+    # Phase 1 fields
+    venue_kind: str | None = None
+    venue_kind_confidence: float | None = None
+    venue_name_quality: str | None = None
+    audience_age_groups: List[str] | None = None
+    audience_tags: List[str] | None = None
+    audience_min_age: int | None = None
+    audience_primary: str | None = None
+    # Phase 2 fields
     website_url: str | None = None
     website_url_confidence: float | None = None
     description: str | None = None
@@ -1317,6 +1326,21 @@ def get_session_history_for_llm(request, session_id: int, limit: int = 10):
 # =============================================================================
 # Venue Enrichment API - For Collector Service
 # =============================================================================
+
+@router.get("/venues", auth=ServiceTokenAuth(), response=VenueEnrichmentListSchema)
+def list_venues(
+    request,
+    limit: int = Query(500, description="Max venues to return"),
+):
+    """
+    Returns all venues for enrichment processing.
+    Used by collector service fallback when Phase 2 endpoint returns empty.
+    """
+    qs = Venue.objects.all().order_by('-created_at')
+    total_count = qs.count()
+    venues = list(qs[:limit])
+    return {"venues": venues, "total_count": total_count}
+
 
 @router.get("/venues/needing-enrichment", auth=ServiceTokenAuth(), response=VenueEnrichmentListSchema)
 def get_venues_needing_enrichment(
