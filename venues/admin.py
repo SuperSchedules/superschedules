@@ -4,6 +4,8 @@ Venue admin configuration with Grappelli styling.
 
 from django.contrib import admin
 from django.db.models import Count
+from django.urls import reverse
+from django.utils.html import format_html
 
 from venues.models import Venue, VenueHours
 from venues.geocoding import geocode_venue
@@ -89,20 +91,73 @@ class VenueHoursInline(admin.TabularInline):
     ordering = ['day_of_week']
 
 
+class HasGeoFilter(admin.SimpleListFilter):
+    """Filter venues by whether they have geocoding."""
+    title = 'Has Geocoding'
+    parameter_name = 'has_geo'
+
+    def lookups(self, request, model_admin):
+        return [('yes', 'Has coordinates'), ('no', 'Missing coordinates')]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.filter(latitude__isnull=False, longitude__isnull=False)
+        if self.value() == 'no':
+            return queryset.filter(latitude__isnull=True)
+        return queryset
+
+
+class HasWebsiteFilter(admin.SimpleListFilter):
+    """Filter venues by whether they have a website."""
+    title = 'Has Website'
+    parameter_name = 'has_website'
+
+    def lookups(self, request, model_admin):
+        return [('yes', 'Has website'), ('no', 'No website')]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.exclude(website_url__isnull=True).exclude(website_url='')
+        if self.value() == 'no':
+            return queryset.filter(website_url__isnull=True) | queryset.filter(website_url='')
+        return queryset
+
+
+class HasDescriptionFilter(admin.SimpleListFilter):
+    """Filter venues by whether they have a description."""
+    title = 'Has Description'
+    parameter_name = 'has_desc'
+
+    def lookups(self, request, model_admin):
+        return [('yes', 'Has description'), ('no', 'No description')]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.exclude(description='')
+        if self.value() == 'no':
+            return queryset.filter(description='')
+        return queryset
+
+
 @admin.register(Venue)
 class VenueAdmin(admin.ModelAdmin):
     """Admin interface for Venue management."""
 
     list_display = [
-        'id', 'name', 'venue_kind', 'venue_name_quality', 'city', 'state',
-        'audience_primary', 'enrichment_status', 'event_count', 'created_at'
+        'id', 'name', 'venue_kind_display', 'name_quality_display', 'city', 'state',
+        'data_quality_indicator', 'audience_display', 'event_count', 'enrichment_status'
     ]
-    list_filter = ['venue_kind', 'venue_name_quality', 'audience_primary', 'enrichment_status', 'state', 'city']
-    search_fields = ['name', 'city', 'state', 'street_address', 'source_domain']
-    readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at']
+    list_filter = [
+        'venue_name_quality', 'venue_kind', 'enrichment_status', 'audience_primary',
+        HasGeoFilter, HasWebsiteFilter, HasDescriptionFilter,
+        'state', 'city'
+    ]
+    search_fields = ['name', 'city', 'state', 'street_address', 'source_domain', 'description']
+    readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at', 'data_quality_indicator']
     ordering = ['-created_at']
     actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses]
     inlines = [VenueHoursInline]
+    list_per_page = 50
 
     fieldsets = (
         ('Venue Identity', {
@@ -116,14 +171,12 @@ class VenueAdmin(admin.ModelAdmin):
         }),
         ('Geocoding', {
             'fields': ('latitude', 'longitude'),
-            'classes': ('collapse',)
         }),
         ('Audience', {
             'fields': ('audience_age_groups', 'audience_tags', 'audience_min_age', 'audience_primary'),
         }),
         ('Content', {
             'fields': ('description', 'kids_summary'),
-            'classes': ('collapse',)
         }),
         ('Enrichment Metadata', {
             'fields': ('enrichment_status', 'last_enriched_at', 'website_url_confidence'),
@@ -145,10 +198,92 @@ class VenueAdmin(admin.ModelAdmin):
         return queryset.annotate(_event_count=Count('events'))
 
     def event_count(self, obj):
-        """Display number of events at this venue."""
-        return getattr(obj, '_event_count', obj.events.count())
+        """Display number of events at this venue as a link to the events list."""
+        count = getattr(obj, '_event_count', obj.events.count())
+        if count == 0:
+            return '0'
+        url = reverse('admin:events_event_changelist') + f'?venue__id__exact={obj.id}'
+        return format_html('<a href="{}">{}</a>', url, count)
     event_count.short_description = 'Events'
     event_count.admin_order_field = '_event_count'
+
+    def venue_kind_display(self, obj):
+        """Display venue kind with icon."""
+        if not obj.venue_kind or obj.venue_kind == 'unknown':
+            return '-'
+        icons = {
+            'library': '📚', 'museum': '🏛️', 'park': '🌳', 'playground': '🎪',
+            'beach': '🏖️', 'skating_rink': '⛸️', 'dog_park': '🐕', 'pool': '🏊',
+            'school': '🏫', 'community_center': '🏢', 'church': '⛪', 'theater': '🎭',
+            'restaurant': '🍽️', 'senior_center': '👴', 'ymca': '🏋️', 'sports_facility': '⚽',
+            'nature_center': '🦋', 'zoo': '🦁', 'aquarium': '🐠',
+        }
+        icon = icons.get(obj.venue_kind, '📍')
+        return f"{icon} {obj.get_venue_kind_display()}"
+    venue_kind_display.short_description = 'Kind'
+    venue_kind_display.admin_order_field = 'venue_kind'
+
+    def name_quality_display(self, obj):
+        """Display name quality with color coding."""
+        if not obj.venue_name_quality:
+            return '-'
+        colors = {
+            'good': '#28a745',
+            'address_only': '#ffc107',
+            'empty': '#dc3545',
+            'placeholder': '#dc3545',
+            'unknown': '#6c757d',
+        }
+        color = colors.get(obj.venue_name_quality, '#6c757d')
+        label = obj.get_venue_name_quality_display()
+        return format_html('<span style="color: {}; font-weight: bold;">{}</span>', color, label)
+    name_quality_display.short_description = 'Name Quality'
+    name_quality_display.admin_order_field = 'venue_name_quality'
+
+    def data_quality_indicator(self, obj):
+        """Show data quality indicators: geo, website, description."""
+        indicators = []
+
+        # Geocoding
+        if obj.latitude and obj.longitude:
+            indicators.append('<span title="Has coordinates" style="color: #28a745;">📍</span>')
+        else:
+            indicators.append('<span title="Missing coordinates" style="color: #dc3545;">📍</span>')
+
+        # Website
+        if obj.website_url:
+            indicators.append('<span title="Has website" style="color: #28a745;">🌐</span>')
+        else:
+            indicators.append('<span title="No website" style="color: #999;">🌐</span>')
+
+        # Description
+        if obj.description:
+            indicators.append('<span title="Has description" style="color: #28a745;">📝</span>')
+        else:
+            indicators.append('<span title="No description" style="color: #999;">📝</span>')
+
+        # Kids summary
+        if obj.kids_summary:
+            indicators.append('<span title="Has kids summary" style="color: #28a745;">👶</span>')
+        else:
+            indicators.append('<span title="No kids summary" style="color: #999;">👶</span>')
+
+        return format_html(' '.join(indicators))
+    data_quality_indicator.short_description = 'Data'
+
+    def audience_display(self, obj):
+        """Display audience info compactly."""
+        parts = []
+        if obj.audience_primary and obj.audience_primary != 'general':
+            parts.append(obj.get_audience_primary_display())
+        if obj.audience_tags:
+            # Show first 2 tags
+            tags = obj.audience_tags[:2]
+            parts.extend(tags)
+        if parts:
+            return ', '.join(parts)
+        return '-'
+    audience_display.short_description = 'Audience'
 
 
 @admin.register(VenueHours)
