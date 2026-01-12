@@ -83,6 +83,42 @@ def cleanup_addresses(modeladmin, request, queryset):
 cleanup_addresses.short_description = "Clean up addresses (remove duplicated city/state/zip)"
 
 
+def rerun_enrichment(modeladmin, request, queryset):
+    """
+    Mark selected venues for re-enrichment.
+
+    Clears enrichment data so the collector service will pick them up
+    on the next enrichment batch run via /api/v1/venues/needing-enrichment.
+    """
+    count = queryset.update(
+        website_url=None,
+        website_url_confidence=None,
+        description='',
+        kids_summary='',
+        enrichment_status='none',
+        last_enriched_at=None,
+    )
+    modeladmin.message_user(request, f"Marked {count} venue(s) for re-enrichment. They will be picked up by the next enrichment batch.")
+rerun_enrichment.short_description = "Re-run enrichment (clear and re-queue)"
+
+
+def rerun_enrichment_keep_website(modeladmin, request, queryset):
+    """
+    Mark selected venues for re-enrichment, keeping discovered website URL.
+
+    Only clears description/kids_summary so they get regenerated.
+    Useful when website URL is correct but descriptions need updating.
+    """
+    count = queryset.update(
+        description='',
+        kids_summary='',
+        enrichment_status='partial',
+        last_enriched_at=None,
+    )
+    modeladmin.message_user(request, f"Marked {count} venue(s) for description re-generation (keeping website URL).")
+rerun_enrichment_keep_website.short_description = "Re-run enrichment (keep website, regenerate descriptions)"
+
+
 class VenueHoursInline(admin.TabularInline):
     """Inline display of venue hours."""
     model = VenueHours
@@ -155,7 +191,7 @@ class VenueAdmin(admin.ModelAdmin):
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain', 'description']
     readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at', 'data_quality_indicator']
     ordering = ['-created_at']
-    actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses]
+    actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses, rerun_enrichment, rerun_enrichment_keep_website]
     inlines = [VenueHoursInline]
     list_per_page = 50
 

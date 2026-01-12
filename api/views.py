@@ -1425,14 +1425,18 @@ def update_venue_enrichment(request, venue_id: int, payload: VenueEnrichmentUpda
     """
     Updates venue with enrichment results from collector service.
     Only updates provided fields (partial update).
+    Explicitly provided None values will clear the field (for nullable fields).
     """
     venue = get_object_or_404(Venue, id=venue_id)
 
     update_fields = []
     data = payload.dict(exclude_unset=True)
 
+    # Fields that can be explicitly set to None/null
+    nullable_fields = {'audience_min_age', 'website_url', 'website_url_confidence', 'kids_summary'}
+
     for field, value in data.items():
-        if value is not None:
+        if value is not None or field in nullable_fields:
             setattr(venue, field, value)
             update_fields.append(field)
 
