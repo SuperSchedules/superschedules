@@ -103,7 +103,7 @@ class SourceAdmin(admin.ModelAdmin):
 class EventAdmin(admin.ModelAdmin):
     list_display = ('id', 'title', 'source', 'start_time', 'get_location_display', 'organizer', 'event_status', 'created_at')
     search_fields = ('title', 'description', 'organizer')
-    list_filter = ('source', 'event_status', 'event_attendance_mode', 'start_time', 'created_at')
+    list_filter = ('source', 'venue', 'event_status', 'event_attendance_mode', 'start_time', 'created_at')
     readonly_fields = ('external_id', 'created_at', 'updated_at')
     
     def get_location_display(self, obj):
