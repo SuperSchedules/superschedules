@@ -55,6 +55,189 @@ ROOM_PATTERNS = [
 # Street suffix patterns
 STREET_SUFFIXES = r'(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Circle|Cir|Place|Pl|Square|Sq|Highway|Hwy|Parkway|Pkwy|Trail|Trl)'
 
+# Address suffix normalization map (abbreviated -> full form)
+ADDRESS_SUFFIX_MAP = {
+    'st': 'street', 'ave': 'avenue', 'rd': 'road', 'blvd': 'boulevard',
+    'dr': 'drive', 'ln': 'lane', 'ct': 'court', 'cir': 'circle',
+    'pl': 'place', 'ter': 'terrace', 'way': 'way', 'pkwy': 'parkway',
+    'hwy': 'highway', 'sq': 'square', 'trl': 'trail',
+}
+
+# Directional abbreviation map
+DIRECTION_MAP = {
+    'n': 'north', 's': 'south', 'e': 'east', 'w': 'west',
+    'ne': 'northeast', 'nw': 'northwest', 'se': 'southeast', 'sw': 'southwest',
+}
+
+# Room indicators for detecting room-like venue names
+ROOM_INDICATORS = {'room', 'hall', 'suite', 'wing', 'floor', 'level', 'space',
+                   'makerspace', 'display case', 'gallery', 'auditorium', 'studio'}
+
+# Venue indicators for detecting proper venue names
+# Note: "hall" is NOT included because it's ambiguous - "Lecture Hall" is a room, but "City Hall" is a venue
+# We detect venues like "City Hall" via "city" keyword, not "hall"
+VENUE_INDICATORS = {'library', 'museum', 'center', 'centre', 'school', 'church', 'ymca',
+                    'ywca', 'park', 'recreation', 'community', 'city', 'town'}
+
+
+def normalize_street_address(address: Optional[str]) -> str:
+    """
+    Normalize a street address for comparison/deduplication.
+
+    Handles:
+    - Case normalization (lowercase)
+    - Suffix expansion: "St" → "street", "Ave" → "avenue"
+    - Direction expansion: "W." → "west", "N" → "north"
+    - "St." followed by a name → "saint" (e.g., "St. James" → "saint james")
+    - Punctuation removal
+    - Whitespace normalization
+
+    Args:
+        address: Raw street address string
+
+    Returns:
+        Normalized address string for comparison
+    """
+    if not address:
+        return ""
+
+    addr = address.strip()
+    if not addr:
+        return ""
+
+    # Handle "St." as "Saint" when followed by a capitalized word (before removing periods)
+    # e.g., "St. James" → "Saint James", but "Main St." → "Main St"
+    addr = re.sub(r'\bSt\.\s+([A-Z])', r'Saint \1', addr)
+
+    # Remove remaining periods (e.g., "W." -> "W", "Ave." -> "Ave")
+    addr = addr.replace('.', '')
+
+    # Lowercase for comparison
+    addr = addr.lower()
+
+    # Normalize whitespace
+    addr = ' '.join(addr.split())
+
+    # Expand directional abbreviations and suffixes
+    words = addr.split()
+    normalized_words = []
+    for i, word in enumerate(words):
+        # Check for direction at start of word or standalone
+        if word in DIRECTION_MAP:
+            normalized_words.append(DIRECTION_MAP[word])
+        elif word in ADDRESS_SUFFIX_MAP:
+            normalized_words.append(ADDRESS_SUFFIX_MAP[word])
+        else:
+            normalized_words.append(word)
+
+    return ' '.join(normalized_words)
+
+
+def _is_room_like_name(name: str) -> bool:
+    """
+    Detect if a name looks like a room/space rather than a proper venue.
+
+    Args:
+        name: Venue name to check
+
+    Returns:
+        True if name appears to be a room/space within a venue
+    """
+    if not name:
+        return False
+
+    name_lower = name.lower()
+
+    # First check for venue keywords - these override room indicators
+    # e.g., "City Hall" has "hall" (room) but also "city" (venue)
+    has_venue_keyword = any(kw in name_lower for kw in VENUE_INDICATORS)
+    if has_venue_keyword:
+        return False
+
+    # Check for room indicators
+    for indicator in ROOM_INDICATORS:
+        if indicator in name_lower:
+            return True
+
+    # Short names without venue keywords are likely rooms
+    words = name_lower.split()
+    if len(words) <= 2:
+        return True
+
+    return False
+
+
+def _is_better_venue_name(new_name: str, existing_name: str) -> bool:
+    """
+    Determine if new_name is a better venue name than existing_name.
+
+    Prefers names with venue keywords (library, museum, center, etc.)
+    over room-like names. When equal, prefers longer names.
+
+    Args:
+        new_name: Candidate new venue name
+        existing_name: Current venue name
+
+    Returns:
+        True if new_name should replace existing_name
+    """
+    if not new_name or new_name == existing_name:
+        return False
+
+    new_lower = new_name.lower()
+    existing_lower = existing_name.lower()
+
+    # Check if either has venue keywords
+    new_has_keywords = any(kw in new_lower for kw in VENUE_INDICATORS)
+    existing_has_keywords = any(kw in existing_lower for kw in VENUE_INDICATORS)
+
+    # If existing has venue keywords and new doesn't, keep existing
+    if existing_has_keywords and not new_has_keywords:
+        return False
+
+    # If new has keywords and existing doesn't, use new
+    if new_has_keywords and not existing_has_keywords:
+        return True
+
+    # If both have keywords or neither, prefer longer name
+    return len(new_name) > len(existing_name)
+
+
+def find_venue_by_address(street_address: str, city: str, state: str) -> Optional[Venue]:
+    """
+    Find an existing venue by normalized street address.
+
+    This enables address-based deduplication where different "venue names"
+    at the same physical address are recognized as the same venue.
+
+    Args:
+        street_address: Street address to search for
+        city: City name
+        state: State abbreviation or name
+
+    Returns:
+        Matching Venue or None if not found
+    """
+    if not street_address or not city:
+        return None
+
+    normalized_addr = normalize_street_address(street_address)
+    if not normalized_addr:
+        return None
+
+    # Query venues in this city/state that have street addresses
+    candidates = Venue.objects.filter(
+        city__iexact=city,
+        state__iexact=state,
+    ).exclude(street_address='').exclude(street_address__isnull=True)
+
+    # Compare normalized addresses
+    for venue in candidates:
+        if normalize_street_address(venue.street_address) == normalized_addr:
+            return venue
+
+    return None
+
 
 def normalize_venue_data(
     location_data: Optional[dict] = None,
@@ -112,16 +295,27 @@ def normalize_venue_data(
 
 
 def _is_high_confidence(location_data: dict) -> bool:
-    """Check if location_data has high confidence and required fields."""
-    confidence = location_data.get("extraction_confidence", 0)
-    if confidence < CONFIDENCE_THRESHOLD:
-        return False
+    """
+    Check if location_data has high confidence and required fields.
 
-    # Must have at least venue_name or city
+    Returns True if either:
+    1. extraction_confidence >= 0.7 AND has venue_name OR city
+    2. Has both venue_name AND city (explicit data from collector/API)
+    """
     has_venue = bool(location_data.get("venue_name"))
     has_city = bool(location_data.get("city"))
 
-    return has_venue or has_city
+    # If we have both venue_name and city, trust the data regardless of confidence
+    # This handles direct API calls where confidence isn't explicitly set
+    if has_venue and has_city:
+        return True
+
+    # Otherwise require explicit high confidence
+    confidence = location_data.get("extraction_confidence", 0)
+    if confidence >= CONFIDENCE_THRESHOLD and (has_venue or has_city):
+        return True
+
+    return False
 
 
 def _clean_street_address(street_address: str, city: str, state: str, postal_code: str) -> tuple[str, str]:
@@ -464,9 +658,15 @@ def build_venue_key(normalized: dict) -> tuple:
 
 def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[Venue], bool]:
     """
-    Get existing venue or create new one based on deduplication key.
+    Get existing venue or create new one based on deduplication.
 
-    Also applies enrichment fields if provided and confidence is higher than existing.
+    Uses address-based matching first (same address = same venue), then falls back
+    to name-based matching. Also applies enrichment fields if provided and
+    confidence is higher than existing.
+
+    When reusing an existing venue by address:
+    - If incoming venue_name is "room-like", it's stored in normalized['room_name']
+    - If incoming venue_name is "better", the venue name is upgraded
 
     Args:
         normalized: Normalized venue data dict (may include enrichment fields)
@@ -484,17 +684,52 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
     key = build_venue_key(normalized)
     slug, city_lower, state_upper, postal_code = key
 
-    # Truncate values to match model max_length constraints
-    slug = slug[:200]
-    postal_code = postal_code[:20]
-    name = normalized.get("venue_name", "")[:200]
-    street_address = normalized.get("street_address", "")[:255]
-    city = normalized.get("city", "")[:100]
-    state = (state_upper or normalized.get("state", ""))[:50]
+    # Truncate values to match model max_length constraints (handle None values)
+    slug = (slug or "")[:200]
+    postal_code = (postal_code or "")[:20]
+    name = (normalized.get("venue_name") or "")[:200]
+    street_address = (normalized.get("street_address") or "")[:255]
+    city = (normalized.get("city") or "")[:100]
+    state = (state_upper or normalized.get("state") or "")[:50]
     country = (normalized.get("country") or "US")[:2]
-    source_domain_truncated = source_domain[:255] if source_domain else ""
+    source_domain_truncated = (source_domain or "")[:255]
 
-    # Try to find existing venue with case-insensitive lookup
+    # STEP 1: Try address-based matching first (different names at same address = same venue)
+    if street_address:
+        existing_by_address = find_venue_by_address(street_address, city, state)
+        if existing_by_address:
+            incoming_name = normalized.get('venue_name', '')
+            existing_room_name = normalized.get('room_name', '')
+
+            # If incoming name differs from existing venue name, determine what to do
+            if incoming_name and incoming_name != existing_by_address.name:
+                if _is_room_like_name(incoming_name):
+                    # Incoming name is room-like - store it as room_name if not already set
+                    if not existing_room_name:
+                        normalized['room_name'] = incoming_name
+                elif _is_better_venue_name(incoming_name, existing_by_address.name):
+                    # Incoming name is better - upgrade the venue name
+                    existing_by_address.name = incoming_name
+                    existing_by_address.slug = slugify(incoming_name)[:200]
+                    existing_by_address.save(update_fields=['name', 'slug'])
+
+            # Update coordinates if venue is missing them but collector provided them
+            update_fields = []
+            if existing_by_address.latitude is None and normalized.get("latitude"):
+                existing_by_address.latitude = _to_decimal(normalized.get("latitude"))
+                existing_by_address.longitude = _to_decimal(normalized.get("longitude"))
+                update_fields.extend(["latitude", "longitude"])
+
+            # Apply enrichment if provided
+            enrichment_updates = _apply_enrichment_fields(existing_by_address, normalized)
+            update_fields.extend(enrichment_updates)
+
+            if update_fields:
+                existing_by_address.save(update_fields=update_fields)
+
+            return existing_by_address, False
+
+    # STEP 2: Try name-based matching (same slug, city, state, postal_code)
     try:
         venue = Venue.objects.get(
             slug=slug,
@@ -520,10 +755,9 @@ def get_or_create_venue(normalized: dict, source_domain: str) -> tuple[Optional[
     except Venue.DoesNotExist:
         pass
 
-    # Prepare enrichment fields for new venue
+    # STEP 3: Create new venue, handling race condition with IntegrityError
     enrichment_kwargs = _get_enrichment_kwargs(normalized)
 
-    # Create new venue, handling race condition with IntegrityError
     try:
         venue = Venue.objects.create(
             name=name,

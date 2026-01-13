@@ -30,6 +30,7 @@ from events.models import (
     ChatMessage,
 )
 from venues.models import Venue
+from venues.extraction import normalize_venue_data, get_or_create_venue
 from api.auth import ServiceTokenAuth
 from api.llm_service import get_llm_service, create_event_discovery_prompt
 
@@ -111,6 +112,32 @@ class VenueEnrichmentUpdateSchema(Schema):
     description: str | None = None
     kids_summary: str | None = None
     enrichment_status: str | None = None
+
+
+class VenueFromOSMSchema(Schema):
+    """Schema for POST /api/venues/from-osm/ - create/update venue from OSM data."""
+    osm_type: str
+    osm_id: int
+    name: str
+    city: str
+    state: str = ""
+    category: str = ""
+    street_address: str = ""
+    postal_code: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    website: str = ""
+    phone: str = ""
+    opening_hours: str = ""
+    operator: str = ""
+    wikidata: str = ""
+
+
+class VenueFromOSMResponseSchema(Schema):
+    """Response schema for venue from OSM endpoint."""
+    venue_id: int
+    status: str  # 'created', 'updated', 'unchanged'
+    changes: List[str] | None = None
 
 
 class VenueEventSchema(Schema):
@@ -758,26 +785,18 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
         source.save(update_fields=["site_strategy"])
     created_ids = []
     updated_ids = []
+    source_domain = strategy.domain if strategy else parsed.netloc
     for ev in payload.events:
-        # Handle venue creation from location_data if provided
+        # Handle venue creation from location_data using proper deduplication
         venue = None
         room_name = ""
         if ev.location_data:
-            loc_data = ev.location_data
-            # Truncate to match model max_length constraints
-            venue_name = (loc_data.get('venue_name') or '')[:200]
-            city = (loc_data.get('city') or '')[:100]
-            if venue_name and city:
-                venue, _ = Venue.objects.get_or_create(
-                    name=venue_name,
-                    city=city,
-                    defaults={
-                        'street_address': (loc_data.get('street_address') or '')[:255],
-                        'state': (loc_data.get('state') or '')[:50],
-                        'postal_code': (loc_data.get('postal_code') or '')[:20],
-                    }
-                )
-            room_name = (loc_data.get('room_name') or '')[:200]
+            # Use the extraction pipeline for proper address-based deduplication
+            normalized = normalize_venue_data(location_data=ev.location_data)
+            if normalized.get('venue_name') and normalized.get('city'):
+                venue, _ = get_or_create_venue(normalized, source_domain)
+                # Room name may have been set by get_or_create_venue if venue_name was room-like
+                room_name = (normalized.get('room_name') or '')[:200]
 
         event, was_created = Event.objects.update_or_create(
             source=source,
@@ -1448,3 +1467,102 @@ def update_venue_enrichment(request, venue_id: int, payload: VenueEnrichmentUpda
         logger.info(f"Venue {venue_id} enriched: updated {update_fields}")
 
     return venue
+
+
+@router.post("/venues/from-osm/", auth=ServiceTokenAuth(), response={201: VenueFromOSMResponseSchema, 200: VenueFromOSMResponseSchema, 400: dict})
+def create_or_update_venue_from_osm(request, payload: VenueFromOSMSchema):
+    """
+    Create or update a Venue from OpenStreetMap data.
+
+    Idempotent - uses osm_type + osm_id for lookup. Returns:
+    - 201 with status='created' for new venues
+    - 200 with status='updated' and changes list for modified venues
+    - 200 with status='unchanged' for identical data
+    """
+    from django.utils.text import slugify
+
+    # Validate required fields
+    if not payload.name or not payload.city:
+        raise HttpError(400, "name and city are required fields")
+
+    # Try to find existing venue by OSM ID
+    try:
+        venue = Venue.objects.get(osm_type=payload.osm_type, osm_id=payload.osm_id)
+        return _update_osm_venue(venue, payload)
+    except Venue.DoesNotExist:
+        return _create_osm_venue(payload)
+
+
+def _create_osm_venue(payload: VenueFromOSMSchema):
+    """Create a new venue from OSM data."""
+    from django.utils.text import slugify
+
+    venue = Venue.objects.create(
+        name=payload.name,
+        slug=slugify(payload.name),
+        osm_type=payload.osm_type,
+        osm_id=payload.osm_id,
+        category=payload.category,
+        street_address=payload.street_address,
+        city=payload.city,
+        state=payload.state,
+        postal_code=payload.postal_code,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        canonical_url=payload.website,
+        phone=payload.phone,
+        opening_hours_raw=payload.opening_hours,
+        operator=payload.operator,
+        wikidata_id=payload.wikidata,
+        data_source='osm',
+    )
+
+    logger.info(f"Created venue {venue.id} from OSM: {payload.osm_type}/{payload.osm_id} ({venue.name})")
+
+    return 201, {"venue_id": venue.id, "status": "created"}
+
+
+def _update_osm_venue(venue: Venue, payload: VenueFromOSMSchema):
+    """Update an existing venue from OSM data, tracking changes."""
+    changes = []
+
+    # Map of payload field -> model field
+    updatable_fields = [
+        ('name', 'name'),
+        ('street_address', 'street_address'),
+        ('city', 'city'),
+        ('state', 'state'),
+        ('postal_code', 'postal_code'),
+        ('latitude', 'latitude'),
+        ('longitude', 'longitude'),
+        ('website', 'canonical_url'),
+        ('phone', 'phone'),
+        ('opening_hours', 'opening_hours_raw'),
+        ('operator', 'operator'),
+        ('wikidata', 'wikidata_id'),
+        ('category', 'category'),
+    ]
+
+    for payload_field, model_field in updatable_fields:
+        new_value = getattr(payload, payload_field)
+        old_value = getattr(venue, model_field)
+
+        # Handle decimal comparison for lat/lng
+        if model_field in ('latitude', 'longitude'):
+            if new_value is not None and old_value is not None:
+                if abs(float(new_value) - float(old_value)) > 0.000001:
+                    setattr(venue, model_field, new_value)
+                    changes.append(payload_field)
+            elif new_value != old_value:
+                setattr(venue, model_field, new_value)
+                changes.append(payload_field)
+        elif new_value != old_value:
+            setattr(venue, model_field, new_value)
+            changes.append(payload_field)
+
+    if changes:
+        venue.save()
+        logger.info(f"Updated venue {venue.id} from OSM: changed {changes}")
+        return 200, {"venue_id": venue.id, "status": "updated", "changes": changes}
+    else:
+        return 200, {"venue_id": venue.id, "status": "unchanged"}

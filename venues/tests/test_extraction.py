@@ -86,21 +86,17 @@ class NormalizeVenueDataTests(TestCase):
 
     def test_confidence_threshold_at_boundary(self):
         """Test behavior at the 0.7 confidence threshold."""
-        # At 0.7 should be accepted
+        # At 0.7 should be accepted (with only venue_name, not city)
         location_data_high = {
             "venue_name": "Library A",
-            "city": "Boston",
-            "state": "MA",
             "extraction_confidence": 0.7
         }
         result_high = normalize_venue_data(location_data=location_data_high)
         self.assertEqual(result_high["venue_name"], "Library A")
 
-        # Below 0.7 should fall back
+        # Below 0.7 should fall back (when only venue_name, no city)
         location_data_low = {
             "venue_name": "Library B",
-            "city": "Boston",
-            "state": "MA",
             "extraction_confidence": 0.69
         }
         place_json = {
@@ -109,6 +105,29 @@ class NormalizeVenueDataTests(TestCase):
         }
         result_low = normalize_venue_data(location_data=location_data_low, place_json=place_json)
         self.assertEqual(result_low["venue_name"], "Better Library Name")
+
+    def test_venue_name_and_city_trusted_regardless_of_confidence(self):
+        """When both venue_name AND city are present, trust the data regardless of confidence."""
+        # Even with low confidence, if we have both venue_name and city, use it
+        location_data = {
+            "venue_name": "Waltham Public Library",
+            "city": "Waltham",
+            "state": "MA",
+            "extraction_confidence": 0.5  # Low confidence
+        }
+        result = normalize_venue_data(location_data=location_data)
+        self.assertEqual(result["venue_name"], "Waltham Public Library")
+        self.assertEqual(result["city"], "Waltham")
+
+        # Even with zero confidence, if we have both fields, use it
+        location_data_no_conf = {
+            "venue_name": "Newton Free Library",
+            "city": "Newton"
+            # No extraction_confidence field
+        }
+        result_no_conf = normalize_venue_data(location_data=location_data_no_conf)
+        self.assertEqual(result_no_conf["venue_name"], "Newton Free Library")
+        self.assertEqual(result_no_conf["city"], "Newton")
 
     def test_empty_inputs_returns_empty_result(self):
         """When all inputs are empty, return empty normalized result."""
@@ -592,3 +611,406 @@ class CleanStreetAddressTests(TestCase):
                 ""
             )
             self.assertEqual(street, "100 Test St")
+
+
+class NormalizeStreetAddressTests(TestCase):
+    """Tests for street address normalization for deduplication."""
+
+    def test_suffix_expansion(self):
+        """Street suffixes should be expanded to full form."""
+        from venues.extraction import normalize_street_address
+
+        test_cases = [
+            ("735 Main St", "735 main street"),
+            ("123 Oak Ave", "123 oak avenue"),
+            ("456 Elm Rd", "456 elm road"),
+            ("789 Park Blvd", "789 park boulevard"),
+            ("100 First Dr", "100 first drive"),
+            ("200 Second Ln", "200 second lane"),
+            ("300 Third Ct", "300 third court"),
+            ("400 Fourth Cir", "400 fourth circle"),
+            ("500 Fifth Pl", "500 fifth place"),
+            ("600 Sixth Ter", "600 sixth terrace"),
+            ("700 Seventh Pkwy", "700 seventh parkway"),
+            ("800 Eighth Hwy", "800 eighth highway"),
+            ("900 Ninth Sq", "900 ninth square"),
+        ]
+        for input_addr, expected in test_cases:
+            with self.subTest(input_addr=input_addr):
+                result = normalize_street_address(input_addr)
+                self.assertEqual(result, expected)
+
+    def test_direction_expansion(self):
+        """Directional abbreviations should be expanded."""
+        from venues.extraction import normalize_street_address
+
+        test_cases = [
+            ("123 N Main St", "123 north main street"),
+            ("456 S Oak Ave", "456 south oak avenue"),
+            ("789 E Elm Rd", "789 east elm road"),
+            ("100 W Park Blvd", "100 west park boulevard"),
+            ("200 NE First St", "200 northeast first street"),
+            ("300 NW Second Ave", "300 northwest second avenue"),
+            ("400 SE Third Rd", "400 southeast third road"),
+            ("500 SW Fourth Blvd", "500 southwest fourth boulevard"),
+        ]
+        for input_addr, expected in test_cases:
+            with self.subTest(input_addr=input_addr):
+                result = normalize_street_address(input_addr)
+                self.assertEqual(result, expected)
+
+    def test_punctuation_removal(self):
+        """Periods and extra punctuation should be removed."""
+        from venues.extraction import normalize_street_address
+
+        test_cases = [
+            ("123 W. Main St.", "123 west main street"),
+            ("456 N. Oak Ave.", "456 north oak avenue"),
+            ("789 St. James Pl", "789 saint james place"),
+        ]
+        for input_addr, expected in test_cases:
+            with self.subTest(input_addr=input_addr):
+                result = normalize_street_address(input_addr)
+                self.assertEqual(result, expected)
+
+    def test_case_normalization(self):
+        """Addresses should be lowercased."""
+        from venues.extraction import normalize_street_address
+
+        test_cases = [
+            ("735 MAIN STREET", "735 main street"),
+            ("123 Oak Avenue", "123 oak avenue"),
+            ("456 ELM RD", "456 elm road"),
+        ]
+        for input_addr, expected in test_cases:
+            with self.subTest(input_addr=input_addr):
+                result = normalize_street_address(input_addr)
+                self.assertEqual(result, expected)
+
+    def test_whitespace_normalization(self):
+        """Multiple spaces should be collapsed to single space."""
+        from venues.extraction import normalize_street_address
+
+        result = normalize_street_address("735  Main   Street")
+        self.assertEqual(result, "735 main street")
+
+    def test_empty_and_none(self):
+        """Empty and None inputs should return empty string."""
+        from venues.extraction import normalize_street_address
+
+        self.assertEqual(normalize_street_address(""), "")
+        self.assertEqual(normalize_street_address(None), "")
+        self.assertEqual(normalize_street_address("   "), "")
+
+
+class IsRoomLikeNameTests(TestCase):
+    """Tests for detecting room-like venue names."""
+
+    def test_room_indicators(self):
+        """Names with room indicators should be detected as room-like."""
+        from venues.extraction import _is_room_like_name
+
+        room_names = [
+            "Lecture Hall",
+            "Main Hall",
+            "Conference Room A",
+            "Meeting Room 101",
+            "Children's Room",
+            "Teen Room",
+            "MakerSpace",
+            "Gallery Wing",
+            "Auditorium",
+            "Studio A",
+            "Display Case",
+            "Children's Display Case",
+            "Teen Display Case",
+            "Suite 200",
+        ]
+        for name in room_names:
+            with self.subTest(name=name):
+                self.assertTrue(_is_room_like_name(name), f"{name} should be room-like")
+
+    def test_venue_names_not_room_like(self):
+        """Proper venue names should not be detected as room-like."""
+        from venues.extraction import _is_room_like_name
+
+        venue_names = [
+            "Waltham Public Library",
+            "Newton Free Library",
+            "Boston Children's Museum",
+            "YMCA of Greater Boston",
+            "First Church of Newton",
+            "Lincoln School",
+            "Community Recreation Center",
+            "Newton City Hall",
+            "Brookline Town Hall",
+        ]
+        for name in venue_names:
+            with self.subTest(name=name):
+                self.assertFalse(_is_room_like_name(name), f"{name} should NOT be room-like")
+
+    def test_short_names_without_keywords(self):
+        """Short names without venue keywords are likely rooms."""
+        from venues.extraction import _is_room_like_name
+
+        # Two words or fewer without venue keywords
+        self.assertTrue(_is_room_like_name("The Pavilion"))
+        self.assertTrue(_is_room_like_name("Oak Room"))
+
+
+class IsBetterVenueNameTests(TestCase):
+    """Tests for comparing venue names to find the 'better' one."""
+
+    def test_venue_keywords_win(self):
+        """Names with venue keywords should be preferred."""
+        from venues.extraction import _is_better_venue_name
+
+        # Library > room name
+        self.assertTrue(_is_better_venue_name("Waltham Public Library", "Lecture Hall"))
+        self.assertTrue(_is_better_venue_name("Newton Free Library", "Main Room"))
+        self.assertTrue(_is_better_venue_name("Community Center", "Room A"))
+
+    def test_room_names_lose(self):
+        """Room names should not replace venue names."""
+        from venues.extraction import _is_better_venue_name
+
+        self.assertFalse(_is_better_venue_name("Lecture Hall", "Waltham Public Library"))
+        self.assertFalse(_is_better_venue_name("MakerSpace", "Newton Community Center"))
+
+    def test_longer_name_wins_when_equal_keywords(self):
+        """When both have or both lack keywords, prefer longer name."""
+        from venues.extraction import _is_better_venue_name
+
+        # Both have keywords - longer wins
+        self.assertTrue(_is_better_venue_name("Newton Free Library Main Branch", "Newton Library"))
+        # Neither has keywords - longer wins
+        self.assertTrue(_is_better_venue_name("The Grand Pavilion", "Pavilion"))
+
+    def test_same_name_is_not_better(self):
+        """Same name should not be considered better."""
+        from venues.extraction import _is_better_venue_name
+
+        self.assertFalse(_is_better_venue_name("Library", "Library"))
+
+
+class FindVenueByAddressTests(TestCase):
+    """Tests for address-based venue lookup."""
+
+    def test_finds_venue_by_normalized_address(self):
+        """Should find existing venue by normalized street address."""
+        from venues.extraction import find_venue_by_address
+
+        # Create a venue
+        Venue.objects.create(
+            name="Waltham Public Library",
+            street_address="735 Main Street",
+            city="Waltham",
+            state="MA",
+            postal_code="02451"
+        )
+
+        # Find by abbreviated address
+        found = find_venue_by_address("735 Main St", "Waltham", "MA")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.name, "Waltham Public Library")
+
+    def test_case_insensitive_city_match(self):
+        """City matching should be case-insensitive."""
+        from venues.extraction import find_venue_by_address
+
+        Venue.objects.create(
+            name="Test Library",
+            street_address="123 Oak Avenue",
+            city="Newton",
+            state="MA",
+            postal_code="02458"
+        )
+
+        found = find_venue_by_address("123 Oak Ave", "NEWTON", "ma")
+        self.assertIsNotNone(found)
+
+    def test_returns_none_when_no_match(self):
+        """Should return None when no venue matches the address."""
+        from venues.extraction import find_venue_by_address
+
+        Venue.objects.create(
+            name="Some Library",
+            street_address="100 First St",
+            city="Boston",
+            state="MA",
+            postal_code="02101"
+        )
+
+        found = find_venue_by_address("200 Second St", "Boston", "MA")
+        self.assertIsNone(found)
+
+    def test_returns_none_for_empty_address(self):
+        """Should return None when street address is empty."""
+        from venues.extraction import find_venue_by_address
+
+        Venue.objects.create(
+            name="Library No Address",
+            street_address="",
+            city="Boston",
+            state="MA",
+            postal_code="02101"
+        )
+
+        found = find_venue_by_address("", "Boston", "MA")
+        self.assertIsNone(found)
+
+    def test_different_state_no_match(self):
+        """Same address in different state should not match."""
+        from venues.extraction import find_venue_by_address
+
+        Venue.objects.create(
+            name="Springfield Library",
+            street_address="123 Main Street",
+            city="Springfield",
+            state="MA",
+            postal_code="01101"
+        )
+
+        found = find_venue_by_address("123 Main St", "Springfield", "IL")
+        self.assertIsNone(found)
+
+
+class AddressBasedDeduplicationTests(TestCase):
+    """Tests for address-based venue deduplication in get_or_create_venue."""
+
+    def test_reuses_venue_at_same_address_different_name(self):
+        """Different venue names at same address should reuse existing venue."""
+        # Create the "main" venue first
+        normalized1 = {
+            "venue_name": "Waltham Public Library",
+            "street_address": "735 Main Street",
+            "city": "Waltham",
+            "state": "MA",
+            "postal_code": "02451"
+        }
+        venue1, created1 = get_or_create_venue(normalized1, "domain.com")
+        self.assertTrue(created1)
+
+        # Try to create "Lecture Hall" at same address
+        normalized2 = {
+            "venue_name": "Lecture Hall",
+            "street_address": "735 Main St",  # Abbreviated form
+            "city": "Waltham",
+            "state": "MA",
+            "postal_code": "02451"
+        }
+        venue2, created2 = get_or_create_venue(normalized2, "domain.com")
+
+        self.assertFalse(created2)
+        self.assertEqual(venue1.id, venue2.id)
+        # Room name should be set for the caller to use
+        self.assertEqual(normalized2.get("room_name"), "Lecture Hall")
+
+    def test_room_name_preserved_when_venue_exists(self):
+        """When matching venue by address, incoming name becomes room_name if room-like."""
+        # Create main venue
+        normalized1 = {
+            "venue_name": "Newton Free Library",
+            "street_address": "330 Homer Street",
+            "city": "Newton",
+            "state": "MA",
+            "postal_code": "02459"
+        }
+        venue1, _ = get_or_create_venue(normalized1, "domain.com")
+
+        # Try with "Children's Room" at same address
+        normalized2 = {
+            "venue_name": "Children's Room",
+            "room_name": "",  # Empty initially
+            "street_address": "330 Homer St",
+            "city": "Newton",
+            "state": "MA",
+            "postal_code": "02459"
+        }
+        venue2, created = get_or_create_venue(normalized2, "domain.com")
+
+        self.assertFalse(created)
+        self.assertEqual(venue1.id, venue2.id)
+        self.assertEqual(normalized2["room_name"], "Children's Room")
+
+    def test_venue_name_upgraded_when_better(self):
+        """When room-like name created first, upgrade to proper venue name later."""
+        # Create with room-like name first
+        normalized1 = {
+            "venue_name": "Lecture Hall",
+            "street_address": "735 Main Street",
+            "city": "Waltham",
+            "state": "MA",
+            "postal_code": "02451"
+        }
+        venue1, _ = get_or_create_venue(normalized1, "domain.com")
+        self.assertEqual(venue1.name, "Lecture Hall")
+
+        # Now create with proper venue name at same address
+        normalized2 = {
+            "venue_name": "Waltham Public Library",
+            "street_address": "735 Main St",
+            "city": "Waltham",
+            "state": "MA",
+            "postal_code": "02451"
+        }
+        venue2, created = get_or_create_venue(normalized2, "domain.com")
+
+        self.assertFalse(created)
+        self.assertEqual(venue1.id, venue2.id)
+        # Venue name should be upgraded
+        venue1.refresh_from_db()
+        self.assertEqual(venue1.name, "Waltham Public Library")
+
+    def test_falls_back_to_name_matching_without_address(self):
+        """Without street address, should use name-based matching."""
+        # Create venue without street address
+        normalized1 = {
+            "venue_name": "Community Center",
+            "street_address": "",
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+        venue1, created1 = get_or_create_venue(normalized1, "domain.com")
+        self.assertTrue(created1)
+
+        # Same name, no address should match
+        normalized2 = {
+            "venue_name": "Community Center",
+            "street_address": "",
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+        venue2, created2 = get_or_create_venue(normalized2, "domain.com")
+
+        self.assertFalse(created2)
+        self.assertEqual(venue1.id, venue2.id)
+
+    def test_original_room_name_preserved(self):
+        """If location_data already has room_name, it should be preserved."""
+        # Create main venue
+        normalized1 = {
+            "venue_name": "Library",
+            "street_address": "100 Main St",
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+        venue1, _ = get_or_create_venue(normalized1, "domain.com")
+
+        # Second event has both venue_name and room_name
+        normalized2 = {
+            "venue_name": "Library",
+            "room_name": "Children's Section",
+            "street_address": "100 Main Street",
+            "city": "Boston",
+            "state": "MA",
+            "postal_code": "02101"
+        }
+        venue2, _ = get_or_create_venue(normalized2, "domain.com")
+
+        self.assertEqual(venue1.id, venue2.id)
+        # Original room_name should be preserved, not overwritten by venue_name
+        self.assertEqual(normalized2["room_name"], "Children's Section")

@@ -404,3 +404,285 @@ class VenueEnrichmentAPITest(TestCase):
         )
 
         self.assertEqual(response.status_code, 401)
+
+
+class VenueFromOSMAPITest(TestCase):
+    """Tests for POST /api/venues/from-osm/ endpoint."""
+
+    def setUp(self):
+        self.service_token = baker.make(ServiceToken)
+
+    def test_create_venue_from_osm_returns_201(self):
+        """Test creating a new venue from OSM data returns 201 with venue_id and status='created'."""
+        payload = {
+            "osm_type": "way",
+            "osm_id": 214642596,
+            "name": "Needham Free Public Library",
+            "category": "library",
+            "street_address": "1139 Highland Avenue",
+            "city": "Needham",
+            "state": "MA",
+            "postal_code": "02494",
+            "latitude": 42.2877508,
+            "longitude": -71.2353727,
+            "website": "https://needhamlibrary.org",
+            "phone": "781-455-7559",
+            "opening_hours": "Mo-Th 09:00-21:00; Fr 09:00-17:30; Sa 09:00-17:00; Su 13:00-17:00",
+            "operator": "Town of Needham",
+            "wikidata": "Q123456",
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+
+        self.assertIn("venue_id", data)
+        self.assertEqual(data["status"], "created")
+
+        # Verify venue was created in database
+        venue = Venue.objects.get(id=data["venue_id"])
+        self.assertEqual(venue.name, "Needham Free Public Library")
+        self.assertEqual(venue.osm_type, "way")
+        self.assertEqual(venue.osm_id, 214642596)
+        self.assertEqual(venue.category, "library")
+        self.assertEqual(venue.city, "Needham")
+        self.assertEqual(venue.state, "MA")
+        self.assertEqual(venue.phone, "781-455-7559")
+        self.assertEqual(venue.opening_hours_raw, "Mo-Th 09:00-21:00; Fr 09:00-17:30; Sa 09:00-17:00; Su 13:00-17:00")
+        self.assertEqual(venue.operator, "Town of Needham")
+        self.assertEqual(venue.wikidata_id, "Q123456")
+        self.assertEqual(venue.data_source, "osm")
+
+    def test_update_existing_osm_venue_returns_updated(self):
+        """Test updating an existing OSM venue returns status='updated' with changes list."""
+        # Create existing venue via OSM
+        existing_venue = baker.make(
+            Venue,
+            name="Needham Library",
+            osm_type="way",
+            osm_id=214642596,
+            city="Needham",
+            state="MA",
+            phone="",
+            opening_hours_raw="",
+            data_source="osm",
+        )
+
+        payload = {
+            "osm_type": "way",
+            "osm_id": 214642596,
+            "name": "Needham Free Public Library",  # Name change
+            "category": "library",
+            "city": "Needham",
+            "state": "MA",
+            "phone": "781-455-7559",  # New phone
+            "opening_hours": "Mo-Th 09:00-21:00",  # New hours
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data["venue_id"], existing_venue.id)
+        self.assertEqual(data["status"], "updated")
+        self.assertIn("changes", data)
+        self.assertIn("name", data["changes"])
+        self.assertIn("phone", data["changes"])
+        self.assertIn("opening_hours", data["changes"])
+
+        # Verify database was updated
+        existing_venue.refresh_from_db()
+        self.assertEqual(existing_venue.name, "Needham Free Public Library")
+        self.assertEqual(existing_venue.phone, "781-455-7559")
+
+    def test_unchanged_osm_venue_returns_unchanged(self):
+        """Test re-submitting identical OSM data returns status='unchanged'."""
+        # Explicitly set all compared fields to match the payload exactly
+        existing_venue = Venue.objects.create(
+            name="Needham Free Public Library",
+            slug="needham-free-public-library",
+            osm_type="way",
+            osm_id=214642596,
+            category="library",
+            street_address="",
+            city="Needham",
+            state="MA",
+            postal_code="",
+            latitude=42.28775,
+            longitude=-71.23537,
+            canonical_url="",
+            phone="781-455-7559",
+            opening_hours_raw="",
+            operator="",
+            wikidata_id="",
+            data_source="osm",
+        )
+
+        # Payload must match the existing venue exactly
+        payload = {
+            "osm_type": "way",
+            "osm_id": 214642596,
+            "name": "Needham Free Public Library",
+            "category": "library",
+            "city": "Needham",
+            "state": "MA",
+            "phone": "781-455-7559",
+            "latitude": 42.28775,
+            "longitude": -71.23537,
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data["venue_id"], existing_venue.id)
+        self.assertEqual(data["status"], "unchanged")
+        # changes should be None when unchanged
+        self.assertIsNone(data.get("changes"))
+
+    def test_osm_type_and_osm_id_required(self):
+        """Test that osm_type and osm_id are required fields."""
+        # Missing osm_id - Django Ninja returns 422 for schema validation errors
+        payload = {"osm_type": "way", "name": "Test Venue", "city": "Boston", "state": "MA"}
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+        self.assertEqual(response.status_code, 422)
+
+        # Missing osm_type
+        payload = {"osm_id": 12345, "name": "Test Venue", "city": "Boston", "state": "MA"}
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_name_and_city_required(self):
+        """Test that name and city are required for venue creation."""
+        # Missing name and city - Django Ninja returns 422 for schema validation errors
+        payload = {
+            "osm_type": "way",
+            "osm_id": 12345,
+            "state": "MA",
+        }
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_requires_authentication(self):
+        """Test endpoint requires service token authentication."""
+        payload = {
+            "osm_type": "way",
+            "osm_id": 12345,
+            "name": "Test Venue",
+            "city": "Boston",
+            "state": "MA",
+        }
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_minimal_osm_venue_creation(self):
+        """Test creating venue with only required fields."""
+        payload = {
+            "osm_type": "node",
+            "osm_id": 98765,
+            "name": "Simple Park",
+            "city": "Waltham",
+            "state": "MA",
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+
+        venue = Venue.objects.get(id=data["venue_id"])
+        self.assertEqual(venue.name, "Simple Park")
+        self.assertEqual(venue.osm_type, "node")
+        self.assertEqual(venue.osm_id, 98765)
+        self.assertEqual(venue.data_source, "osm")
+        # Optional fields should be empty/default
+        self.assertEqual(venue.phone, "")
+        self.assertEqual(venue.opening_hours_raw, "")
+
+    def test_osm_venue_sets_website_to_canonical_url(self):
+        """Test that website from OSM is stored in canonical_url field."""
+        payload = {
+            "osm_type": "way",
+            "osm_id": 11111,
+            "name": "Library with Website",
+            "city": "Boston",
+            "state": "MA",
+            "website": "https://example.org",
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        venue = Venue.objects.get(id=response.json()["venue_id"])
+        self.assertEqual(venue.canonical_url, "https://example.org")
+
+    def test_osm_venue_latitude_longitude_stored(self):
+        """Test that lat/lng coordinates are stored correctly."""
+        payload = {
+            "osm_type": "node",
+            "osm_id": 22222,
+            "name": "Geo Test Venue",
+            "city": "Cambridge",
+            "state": "MA",
+            "latitude": 42.3736,
+            "longitude": -71.1097,
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        venue = Venue.objects.get(id=response.json()["venue_id"])
+        self.assertAlmostEqual(float(venue.latitude), 42.3736, places=4)
+        self.assertAlmostEqual(float(venue.longitude), -71.1097, places=4)

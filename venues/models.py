@@ -114,6 +114,20 @@ class Venue(models.Model):
     enrichment_status = models.CharField(max_length=16, choices=ENRICHMENT_STATUS_CHOICES, default="none", help_text="Enrichment status")
     last_enriched_at = models.DateTimeField(null=True, blank=True, help_text="When venue was last enriched")
 
+    # OSM identification (for deduplication and updates from OpenStreetMap)
+    osm_type = models.CharField(max_length=10, blank=True, null=True, help_text="OSM element type: node, way, or relation")
+    osm_id = models.BigIntegerField(blank=True, null=True, help_text="OpenStreetMap element ID")
+
+    # OSM-sourced data
+    category = models.CharField(max_length=50, blank=True, help_text="Raw category from OSM (library, museum, park, etc.)")
+    opening_hours_raw = models.TextField(blank=True, help_text="Operating hours in OSM format")
+    operator = models.CharField(max_length=255, blank=True, help_text="Operating organization (e.g., 'Town of Needham')")
+    wikidata_id = models.CharField(max_length=50, blank=True, help_text="Wikidata ID for linked data enrichment")
+    phone = models.CharField(max_length=50, blank=True, help_text="Phone number")
+
+    # Track data source
+    data_source = models.CharField(max_length=50, default='scraped', help_text="Data source: 'osm', 'scraped', or 'manual'")
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -122,11 +136,21 @@ class Venue(models.Model):
         indexes = [
             models.Index(fields=['slug', 'city', 'state', 'postal_code']),
             models.Index(fields=['city', 'state']),
+            # Index for address-based venue lookups (deduplication by physical address)
+            models.Index(fields=['city', 'state', 'street_address'], name='venue_address_lookup'),
+            # Index for OSM lookups
+            models.Index(fields=['osm_type', 'osm_id']),
         ]
         constraints = [
             models.UniqueConstraint(
                 fields=['slug', 'city', 'state', 'postal_code'],
                 name='unique_venue_identity'
+            ),
+            # OSM deduplication: only one venue per OSM element
+            models.UniqueConstraint(
+                fields=['osm_type', 'osm_id'],
+                condition=models.Q(osm_id__isnull=False),
+                name='unique_osm_venue'
             )
         ]
 
