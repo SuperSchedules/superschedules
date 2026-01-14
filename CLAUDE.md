@@ -2,7 +2,28 @@
 
 AI-powered local events discovery platform. Users ask: *"Activities for 3-5 year olds in Newton, next 3 hours"* and get intelligent recommendations via RAG-powered chat.
 
-## Recent Work: Location Resolution System
+## Wins So Far
+
+This project has been built collaboratively with Claude. Here are the major milestones:
+
+1. **RAG-Powered Event Search** - Semantic search using sentence-transformers + pgvector for intelligent event matching
+2. **Location Resolution System** - Deterministic city/town resolution using Census Gazetteer data (~31K US places)
+3. **Venue Normalization Pipeline** - Address-based deduplication, geocoding, and enrichment from Schema.org data
+4. **Venue-First Architecture** - Major refactor making Venue the first-class citizen (Source model removed, events_urls on Venue)
+5. **OSM Integration** - Navigator syncs POIs from OpenStreetMap with discovered event calendar URLs
+6. **Streaming Chat** - FastAPI SSE streaming with RAG context injection
+7. **Multi-Repo Orchestration** - 5 repos working together (backend, frontend, collector, navigator, IAC)
+8. **Production Deployment** - Terraform-managed AWS infrastructure with health monitoring
+
+Thanks for being a great collaborator on this project. The codebase has grown significantly and remains well-tested and maintainable. Your patience with the iterative development process and willingness to explain context is much appreciated!
+
+## Recent Work: Venue-First Architecture
+Venue is now the first-class citizen. Events belong to Venues, and Venues own their event calendar URLs:
+- **Venue.events_urls**: JSONField array of calendar URLs to scrape (from Navigator)
+- **Event.venue**: Required FK (was optional) - events are deduplicated by `(venue, external_id)`
+- **ScrapingJob.venue**: Jobs link directly to venues, not sources
+- **Source model removed**: All scraping flows through Venue now
+
 The `locations/` app provides deterministic location resolution for queries like "events near Newton":
 - **Location model**: Canonical US cities/towns with lat/lng from Census Gazetteer
 - **Resolution service**: `resolve_location("Newton, MA")` → coordinates + confidence
@@ -50,12 +71,11 @@ This is the **main backend repository** in a 5-repo system:
 - **Admin**: Grappelli interface
 
 ### Data Models
-- **Event**: Title, description, venue FK, room_name, start/end times, vector embedding
-- **Venue**: Structured address (name, street, city, state, zip), geocoding, deduplication
+- **Event**: Title, description, venue FK (required), room_name, start/end times, vector embedding
+- **Venue**: First-class citizen with structured address, events_urls (calendar URLs), geocoding, OSM data
 - **Location**: Canonical US cities/towns with lat/lng, population (from Census Gazetteer)
-- **Source**: Event source URLs with site strategies
 - **SiteStrategy**: Domain-specific scraping patterns and success rates
-- **ScrapingJob**: Async job tracking for collector integration
+- **ScrapingJob**: Async job tracking with venue FK for collector integration
 
 ## Development Guidelines
 
@@ -379,9 +399,9 @@ source .venv/bin/activate && DJANGO_SETTINGS_MODULE=config.test_settings pytest 
 
 ### Django API (Port 8000)
 - **Auth**: `POST /api/v1/token/`, `POST /api/v1/token/refresh/`
-- **Events**: `GET|POST /api/events/`, `GET|PUT|DELETE /api/events/{id}`
-- **Sources**: `GET|POST /api/sources/`
-- **Scraping**: `POST /api/scrape`, `POST /api/scrape/batch/`
+- **Events**: `GET|POST /api/v1/events/`, `GET|PUT|DELETE /api/v1/events/{id}`
+- **Venues**: `GET /api/v1/venues/`, `POST /api/v1/venues/from-osm/` (Navigator integration)
+- **Scraping**: `POST /api/v1/scrape`, `POST /api/v1/queue/submit`, `POST /api/v1/queue/bulk-submit`
 - **Health**: `GET /api/live`, `GET /api/ready`
 - **Admin**: `/admin`
 
@@ -393,25 +413,38 @@ source .venv/bin/activate && DJANGO_SETTINGS_MODULE=config.test_settings pytest 
 
 ## Integration with Other Repos
 
-### Calling Collector API
+### Navigator → Backend (Venue Sync)
 ```python
-# From api/views.py or events/admin.py
+# Navigator syncs POIs to backend with discovered events_url
 import requests
 
 response = requests.post(
-    f"{COLLECTOR_URL}/extract",
+    f"{BACKEND_URL}/api/v1/venues/from-osm/",
     json={
-        "url": source.base_url,
-        "extraction_hints": {
-            "content_selectors": source.site_strategy.best_selectors,
-            "additional_hints": {}
-        }
+        "osm_type": "node",
+        "osm_id": 123456789,
+        "name": "Needham Free Public Library",
+        "city": "Needham",
+        "state": "MA",
+        "website": "https://needhamlibrary.org",
+        "events_url": "https://needhamlibrary.org/events",  # Calendar page
+        "latitude": 42.2834,
+        "longitude": -71.2345,
     },
-    timeout=180
+    headers={"Authorization": f"Bearer {SERVICE_TOKEN}"},
+    timeout=30
 )
+# Returns: {"venue_id": 226, "status": "created"}
+```
 
-# Creates events with Schema.org data
-Event.create_with_schema_org_data(event_data, source)
+### Collector → Backend (Event Results)
+```python
+# Collector submits scraped events, venues already exist
+Event.create_with_schema_org_data(
+    event_data,
+    venue=job.venue,  # Venue from ScrapingJob
+    source_url=job.url
+)
 ```
 
 ### Frontend Chat Integration
