@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.utils import timezone
 from datetime import timedelta
 
-from events.models import Event, Source
+from events.models import Event
 from venues.models import Venue
 from locations.services import (
     calculate_bounding_box,
@@ -132,12 +132,6 @@ class FilterByDistanceTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         """Create test venues and events."""
-        # Create a source for events
-        cls.source = Source.objects.create(
-            base_url="https://example.com",
-            name="Test Source",
-        )
-
         # Create venue in Newton, MA
         cls.newton_venue = Venue.objects.create(
             name="Newton Library",
@@ -186,7 +180,6 @@ class FilterByDistanceTests(TestCase):
             description="Test event in Newton",
             start_time=future_time,
             venue=cls.newton_venue,
-            source=cls.source,
         )
 
         cls.cambridge_event = Event.objects.create(
@@ -196,7 +189,6 @@ class FilterByDistanceTests(TestCase):
             description="Test event in Cambridge",
             start_time=future_time,
             venue=cls.cambridge_venue,
-            source=cls.source,
         )
 
         cls.springfield_event = Event.objects.create(
@@ -206,7 +198,6 @@ class FilterByDistanceTests(TestCase):
             description="Test event in Springfield",
             start_time=future_time,
             venue=cls.springfield_venue,
-            source=cls.source,
         )
 
         cls.no_coords_event = Event.objects.create(
@@ -216,7 +207,6 @@ class FilterByDistanceTests(TestCase):
             description="Test event with no coordinates",
             start_time=future_time,
             venue=cls.no_coords_venue,
-            source=cls.source,
         )
 
     def test_filter_includes_nearby(self):
@@ -303,11 +293,6 @@ class FilterByDistanceIntegrationTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         """Create test data."""
-        cls.source = Source.objects.create(
-            base_url="https://example.com",
-            name="Test Source",
-        )
-
         # Create multiple venues at varying distances
         cls.venues = []
         cls.events = []
@@ -341,7 +326,6 @@ class FilterByDistanceIntegrationTests(TestCase):
                 description=f"Test event at {name} distance",
                 start_time=future_time,
                 venue=venue,
-                source=cls.source,
             )
             cls.events.append(event)
 

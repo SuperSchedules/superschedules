@@ -2,7 +2,7 @@
 Tests for RAG/LLM integration issues.
 
 This test reproduces the specific issue where:
-- RAG service finds relevant events (8 events near Needham)  
+- RAG service finds relevant events (8 events near Needham)
 - Chat service receives those events
 - But LLM response says "no events found"
 """
@@ -13,7 +13,7 @@ from django.test import TestCase
 from model_bakery import baker
 from datetime import datetime, timedelta
 
-from events.models import Event, Source
+from events.models import Event
 from venues.models import Venue
 from chat_service.app import get_relevant_events, stream_model_response
 from api.llm_service import create_event_discovery_prompt
@@ -21,11 +21,9 @@ from api.llm_service import create_event_discovery_prompt
 
 class RAGLLMIntegrationTest(TestCase):
     """Test the full RAG -> Chat -> LLM pipeline"""
-    
+
     def setUp(self):
         """Create test events that should be found by RAG"""
-        source = baker.make(Source, name="Needham Library")
-
         # Create venues
         library_venue = baker.make(Venue, name="Needham Public Library", city="Needham", state="MA")
         common_venue = baker.make(Venue, name="Needham Town Common", city="Needham", state="MA")
@@ -39,7 +37,6 @@ class RAGLLMIntegrationTest(TestCase):
                 venue=library_venue,
                 room_name="Children's Room",
                 start_time=datetime.now() + timedelta(days=2),
-                source=source,
                 embedding=[0.1] * 384  # Mock embedding
             ),
             baker.make(Event,
@@ -47,7 +44,6 @@ class RAGLLMIntegrationTest(TestCase):
                 description="Outdoor activities for families with children including games and snacks",
                 venue=common_venue,
                 start_time=datetime.now() + timedelta(days=3),
-                source=source,
                 embedding=[0.2] * 384
             ),
             baker.make(Event,
@@ -55,7 +51,6 @@ class RAGLLMIntegrationTest(TestCase):
                 description="Creative art class for kids aged 5-10 with all supplies provided",
                 venue=center_venue,
                 start_time=datetime.now() + timedelta(days=4),
-                source=source,
                 embedding=[0.3] * 384
             )
         ]
@@ -257,7 +252,6 @@ class PromptFlowDebugTest(TestCase):
         """Test the complete RAG flow as used in the chat service"""
 
         # Create test events for RAG to find
-        source = baker.make(Source, name="Test Source")
         venue = baker.make(Venue, name="Needham Community Center", city="Needham", state="MA")
         test_events = [
             baker.make(Event,
@@ -265,7 +259,6 @@ class PromptFlowDebugTest(TestCase):
                 description="Fun activities for children in Needham",
                 venue=venue,
                 start_time=datetime.now() + timedelta(days=1),
-                source=source,
                 embedding=[0.5] * 384  # Mock embedding that should match
             )
         ]

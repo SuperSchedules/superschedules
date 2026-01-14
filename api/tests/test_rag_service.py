@@ -122,21 +122,23 @@ class TestVectorizationContent(RAGServiceTest):
         self.assertIn(expected_month, vectorized_text)
     
     def test_create_event_text_handles_missing_fields(self):
-        """Test vectorized text handles events with missing description/venue."""
+        """Test vectorized text handles events with minimal description."""
+        # Create a minimal venue for the event
+        minimal_venue = baker.make(Venue, name="Minimal Venue", city="Test", state="MA")
         minimal_event = baker.make(
             Event,
             title="Minimal Event",
             description="",  # Empty description
-            venue=None,      # No venue
+            venue=minimal_venue,
             start_time=timezone.now() + timedelta(days=1)
         )
-        
+
         vectorized_text = self.rag_service._create_event_text(minimal_event)
-        
+
         # Should still work and include title and temporal context
         self.assertIn("Minimal Event", vectorized_text)
         self.assertIn(minimal_event.start_time.strftime("%A"), vectorized_text)
-        
+
         # Should not have empty strings that create extra spaces
         self.assertNotIn("  ", vectorized_text)  # No double spaces
     

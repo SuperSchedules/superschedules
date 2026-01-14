@@ -22,7 +22,6 @@ from uuid import uuid4
 
 from events.models import (
     Event,
-    Source,
     SiteStrategy,
     ScrapingJob,
     ScrapeBatch,
@@ -127,6 +126,7 @@ class VenueFromOSMSchema(Schema):
     latitude: float | None = None
     longitude: float | None = None
     website: str = ""
+    events_url: str = ""  # Event calendar URL from Navigator
     phone: str = ""
     opening_hours: str = ""
     operator: str = ""
@@ -185,7 +185,7 @@ class EventSchema(ModelSchema):
 
 
 class EventCreateSchema(Schema):
-    source_id: int | None = None
+    venue_id: int | None = None  # Provide existing venue, or let location_data create one
     external_id: str
     title: str
     description: str
@@ -201,7 +201,7 @@ class EventCreateSchema(Schema):
 
 
 class EventUpdateSchema(Schema):
-    source_id: int | None = None
+    venue_id: int | None = None
     external_id: str | None = None
     title: str | None = None
     description: str | None = None
@@ -209,26 +209,6 @@ class EventUpdateSchema(Schema):
     end_time: datetime | None = None
     url: str | None = None
     metadata_tags: List[str] | None = None
-
-
-class SourceSchema(ModelSchema):
-    class Meta:
-        model = Source
-        fields = [
-            "id",
-            "name",
-            "base_url",
-            "search_method",
-            "status",
-            "date_added",
-            "last_run_at",
-        ]
-
-
-class SourceCreateSchema(Schema):
-    base_url: str
-    name: str | None = None
-    search_method: str | None = None
 
 
 class SiteStrategySchema(ModelSchema):
@@ -475,30 +455,8 @@ def ping(request):
     return {"message": f"Hello, {request.user.username}!"}
 
 
-@router.get("/sources", auth=JWTAuth(), response=List[SourceSchema])
-def list_sources(request):
-    return Source.objects.filter(user=request.user)
-
-
-@router.post("/sources", auth=JWTAuth(), response={201: SourceSchema})
-def create_source(request, payload: SourceCreateSchema):
-    parsed = urlparse(payload.base_url)
-    domain = parsed.netloc
-    strategy = SiteStrategy.objects.filter(domain=domain).first()
-    source = Source.objects.create(
-        user=request.user,
-        name=payload.name,
-        base_url=payload.base_url,
-        site_strategy=strategy,
-        search_method=payload.search_method or Source.SearchMethod.MANUAL,
-        status=Source.Status.NOT_RUN,
-    )
-    # Trigger collection via collector API
-    try:
-        _trigger_collection(source)
-    except Exception as e:
-        logger.error("Failed to trigger collection for source %d: %s", source.id, e)
-    return 201, source
+# NOTE: Source endpoints (/sources) have been removed - venues are now the first-class citizen
+# Use /venues/from-osm/ to create venues with events_urls
 
 
 @router.get(
@@ -560,44 +518,41 @@ def get_event(request, event_id: int):
 
 @router.post("/events", auth=ServiceTokenAuth(), response={201: EventSchema})
 def create_event(request, payload: EventCreateSchema):
-    if payload.source_id is not None:
-        source = get_object_or_404(Source, id=payload.source_id)
-    else:
-        if not payload.url:
-            raise HttpError(400, "Either source_id or url must be provided.")
-        parsed = urlparse(payload.url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-        strategy = SiteStrategy.objects.filter(domain=parsed.netloc).first()
-        source, created = Source.objects.get_or_create(
-            base_url=base_url,
-            defaults={"site_strategy": strategy},
-        )
-        if not created and source.site_strategy != strategy and strategy is not None:
-            source.site_strategy = strategy
-            source.save(update_fields=["site_strategy"])
+    """Create event - venue-first architecture."""
+    # Determine venue from venue_id or location_data
+    venue = None
+    if payload.venue_id is not None:
+        venue = get_object_or_404(Venue, id=payload.venue_id)
 
-    event, _ = Event.create_with_schema_org_data({
-        'external_id': payload.external_id,
-        'title': payload.title,
-        'description': payload.description,
-        'location_data': payload.location_data,
-        'start_time': payload.start_time,
-        'end_time': payload.end_time,
-        'url': payload.url,
-        'tags': payload.metadata_tags or [],
-        'organizer': payload.organizer or '',
-        'event_status': payload.event_status or '',
-        'event_attendance_mode': payload.event_attendance_mode or '',
-    }, source)
-    return 201, event
+    try:
+        event, _ = Event.create_with_schema_org_data(
+            {
+                'external_id': payload.external_id,
+                'title': payload.title,
+                'description': payload.description,
+                'location_data': payload.location_data,
+                'start_time': payload.start_time,
+                'end_time': payload.end_time,
+                'url': payload.url,
+                'tags': payload.metadata_tags or [],
+                'organizer': payload.organizer or '',
+                'event_status': payload.event_status or '',
+                'event_attendance_mode': payload.event_attendance_mode or '',
+            },
+            venue=venue,
+            source_url=payload.url or '',
+        )
+        return 201, event
+    except ValueError as e:
+        raise HttpError(400, str(e))
 
 
 @router.put("/events/{event_id}", auth=ServiceTokenAuth(), response=EventSchema)
 def update_event(request, event_id: int, payload: EventUpdateSchema):
     event = get_object_or_404(Event, id=event_id)
     data = payload.dict(exclude_unset=True)
-    if "source_id" in data:
-        event.source = get_object_or_404(Source, id=data.pop("source_id"))
+    if "venue_id" in data:
+        event.venue = get_object_or_404(Venue, id=data.pop("venue_id"))
     for attr, value in data.items():
         setattr(event, attr, value)
     event.save()
@@ -682,19 +637,16 @@ def submit_scrape(request, payload: ScrapeRequestSchema):
         logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
         return recent_success
 
-    # Create or get source
-    source, _ = Source.objects.get_or_create(
-        base_url=payload.url,
-        defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
-    )
+    # Find venue that has this URL in events_urls
+    venue = Venue.objects.filter(events_urls__contains=[payload.url]).first()
 
-    # Create new job for queue
+    # Create new job for queue (linked to venue if found)
     job = ScrapingJob.objects.create(
         url=payload.url,
         domain=domain,
         status='pending',
         submitted_by=request.user,
-        source=source,
+        venue=venue,
         priority=5,  # Normal priority for manual submissions
         lambda_request_id=str(uuid4()),
     )
@@ -725,11 +677,8 @@ def submit_batch(request, payload: BatchRequestSchema):
             job_ids.append(existing_job.id)
             continue
 
-        # Create or get source
-        source, _ = Source.objects.get_or_create(
-            base_url=url,
-            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
-        )
+        # Find venue that has this URL in events_urls
+        venue = Venue.objects.filter(events_urls__contains=[url]).first()
 
         # Create new job with lower priority for batch
         job = ScrapingJob.objects.create(
@@ -737,7 +686,7 @@ def submit_batch(request, payload: BatchRequestSchema):
             domain=domain,
             status='pending',
             submitted_by=request.user,
-            source=source,
+            venue=venue,
             priority=7,  # Lower priority for batch submissions
             lambda_request_id=str(uuid4()),
         )
@@ -768,44 +717,42 @@ def get_scrape_job(request, job_id: int):
 
 @router.post("/scrape/{job_id}/results", auth=ServiceTokenAuth())
 def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
+    """Save scraping results - venue-first architecture."""
     job = get_object_or_404(ScrapingJob, id=job_id)
     parsed = urlparse(job.url)
-    base_url = f"{parsed.scheme}://{parsed.netloc}"
-    strategy = SiteStrategy.objects.filter(domain=parsed.netloc).first()
-    source_defaults = {
-        "search_method": Source.SearchMethod.MANUAL,
-        "user": job.submitted_by,
-        "site_strategy": strategy,
-    }
-    source, created = Source.objects.get_or_create(
-        base_url=base_url, defaults=source_defaults
-    )
-    if not created and source.site_strategy != strategy and strategy is not None:
-        source.site_strategy = strategy
-        source.save(update_fields=["site_strategy"])
+    source_domain = parsed.netloc
+
     created_ids = []
     updated_ids = []
-    source_domain = strategy.domain if strategy else parsed.netloc
+    skipped_count = 0
+
     for ev in payload.events:
-        # Handle venue creation from location_data using proper deduplication
+        # Venue is required - create from location_data
         venue = None
         room_name = ""
         if ev.location_data:
-            # Use the extraction pipeline for proper address-based deduplication
             normalized = normalize_venue_data(location_data=ev.location_data)
             if normalized.get('venue_name') and normalized.get('city'):
                 venue, _ = get_or_create_venue(normalized, source_domain)
-                # Room name may have been set by get_or_create_venue if venue_name was room-like
                 room_name = (normalized.get('room_name') or '')[:200]
 
+        if not venue:
+            logger.warning(f"Skipping event '{ev.title}': no venue could be determined from location_data")
+            skipped_count += 1
+            continue
+
+        # Link job to venue if not already linked
+        if job.venue is None:
+            job.venue = venue
+
+        # Venue-first deduplication: (venue, external_id)
         event, was_created = Event.objects.update_or_create(
-            source=source,
+            venue=venue,
             external_id=ev.external_id,
             defaults={
                 "scraping_job": job,
                 "title": ev.title,
                 "description": ev.description,
-                "venue": venue,
                 "room_name": room_name,
                 "start_time": ev.start_time,
                 "end_time": ev.end_time,
@@ -821,6 +768,7 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
             created_ids.append(event.id)
         else:
             updated_ids.append(event.id)
+
     job.status = "completed" if payload.success else "failed"
     job.events_found = payload.events_found
     job.pages_processed = payload.pages_processed
@@ -828,6 +776,10 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
     job.error_message = payload.error_message or ""
     job.completed_at = timezone.now()
     job.save()
+
+    if skipped_count > 0:
+        logger.warning(f"Job {job_id}: skipped {skipped_count} events without venue data")
+
     return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
 
 
@@ -862,19 +814,16 @@ def submit_url_to_queue(request, payload: ScrapeRequestSchema):
         logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
         return recent_success
 
-    # Create or get source
-    source, _ = Source.objects.get_or_create(
-        base_url=payload.url,
-        defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
-    )
+    # Find venue that has this URL in events_urls
+    venue = Venue.objects.filter(events_urls__contains=[payload.url]).first()
 
-    # Create new job
+    # Create new job (linked to venue if found)
     job = ScrapingJob.objects.create(
         url=payload.url,
         domain=domain,
         status='pending',
         submitted_by=request.user,
-        source=source,
+        venue=venue,
         priority=5
     )
 
@@ -906,37 +855,40 @@ def get_next_job(request, worker_id: str = Query(...)):
 
 @router.post("/queue/{job_id}/complete", auth=ServiceTokenAuth())
 def complete_job(request, job_id: int, payload: ScrapeResultSchema):
-    """Worker reports job completion with events."""
+    """Worker reports job completion with events - venue-first architecture."""
     job = get_object_or_404(ScrapingJob, id=job_id)
-
-    source = job.source
-    if not source:
-        # Create source if not already linked
-        parsed = urlparse(job.url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-        source, _ = Source.objects.get_or_create(
-            base_url=base_url,
-            defaults={'user': job.submitted_by, 'status': Source.Status.NOT_RUN}
-        )
-        job.source = source
 
     created_ids = []
     updated_ids = []
+    skipped_count = 0
+
     for event_data in payload.events:
-        event, was_created = Event.create_with_schema_org_data({
-            'external_id': event_data.external_id,
-            'title': event_data.title,
-            'description': event_data.description,
-            'location_data': event_data.location_data,
-            'start_time': event_data.start_time,
-            'end_time': event_data.end_time,
-            'url': event_data.url,
-            'tags': event_data.metadata_tags or [],
-        }, source)
-        if was_created:
-            created_ids.append(event.id)
-        else:
-            updated_ids.append(event.id)
+        try:
+            event, was_created = Event.create_with_schema_org_data(
+                {
+                    'external_id': event_data.external_id,
+                    'title': event_data.title,
+                    'description': event_data.description,
+                    'location_data': event_data.location_data,
+                    'start_time': event_data.start_time,
+                    'end_time': event_data.end_time,
+                    'url': event_data.url,
+                    'tags': event_data.metadata_tags or [],
+                },
+                source_url=job.url,
+                venue=job.venue,  # Use venue linked to job if available
+            )
+            # Link job to venue from first event if not already set
+            if job.venue is None and event.venue:
+                job.venue = event.venue
+
+            if was_created:
+                created_ids.append(event.id)
+            else:
+                updated_ids.append(event.id)
+        except ValueError as e:
+            logger.warning(f"Skipping event '{event_data.title}': {e}")
+            skipped_count += 1
 
     job.status = 'completed' if payload.success else 'failed'
     job.events_found = len(created_ids) + len(updated_ids)
@@ -945,9 +897,8 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
     job.completed_at = timezone.now()
     job.save()
 
-    source.status = Source.Status.PROCESSED
-    source.last_run_at = timezone.now()
-    source.save()
+    if skipped_count > 0:
+        logger.warning(f"Job {job_id}: skipped {skipped_count} events without venue data")
 
     logger.info(f"Job {job_id} completed: {len(created_ids)} created, {len(updated_ids)} updated")
     return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
@@ -996,11 +947,8 @@ def bulk_submit_urls(request, payload: BatchRequestSchema):
             jobs.append(existing_job)
             continue
 
-        # Create or get source
-        source, _ = Source.objects.get_or_create(
-            base_url=url,
-            defaults={'user': request.user, 'status': Source.Status.NOT_RUN}
-        )
+        # Find venue that has this URL in events_urls
+        venue = Venue.objects.filter(events_urls__contains=[url]).first()
 
         # Create new job with lower priority for bulk
         job = ScrapingJob.objects.create(
@@ -1008,7 +956,7 @@ def bulk_submit_urls(request, payload: BatchRequestSchema):
             domain=parsed.netloc,
             status='pending',
             submitted_by=request.user,
-            source=source,
+            venue=venue,
             priority=7  # Lower priority for bulk
         )
         jobs.append(job)
@@ -1045,15 +993,8 @@ def bulk_submit_urls_service(request, payload: BatchRequestSchema):
             skipped += 1
             continue
 
-        # Create or get source
-        source, _ = Source.objects.get_or_create(
-            base_url=url,
-            defaults={
-                'user': admin_user,
-                'status': Source.Status.NOT_RUN,
-                'name': parsed.netloc  # Use domain as default name
-            }
-        )
+        # Find venue that has this URL in events_urls
+        venue = Venue.objects.filter(events_urls__contains=[url]).first()
 
         # Create new job with lower priority for bulk
         job = ScrapingJob.objects.create(
@@ -1061,7 +1002,7 @@ def bulk_submit_urls_service(request, payload: BatchRequestSchema):
             domain=parsed.netloc,
             status='pending',
             submitted_by=admin_user,
-            source=source,
+            venue=venue,
             priority=7  # Lower priority for bulk
         )
         jobs.append(job)
@@ -1159,26 +1100,6 @@ def _extract_follow_up_questions(response: str) -> List[str]:
     import re
     questions = re.findall(r'[^.!?]*\?', response)
     return [q.strip() for q in questions[:3]]  # Limit to 3 questions
-
-
-def _trigger_collection(source):
-    """Queue a scraping job for the source."""
-    from urllib.parse import urlparse
-
-    parsed = urlparse(source.base_url)
-    domain = parsed.netloc
-
-    # Create a scraping job with priority 5 (default for user-submitted URLs)
-    job = ScrapingJob.objects.create(
-        url=source.base_url,
-        domain=domain,
-        status='pending',
-        submitted_by=source.user,
-        source=source,
-        priority=5
-    )
-
-    logger.info(f"Created scraping job {job.id} for source {source.id} ({source.base_url})")
 
 
 # =============================================================================
@@ -1497,6 +1418,9 @@ def _create_osm_venue(payload: VenueFromOSMSchema):
     """Create a new venue from OSM data."""
     from django.utils.text import slugify
 
+    # Build events_urls list if provided
+    events_urls = [payload.events_url] if payload.events_url else []
+
     venue = Venue.objects.create(
         name=payload.name,
         slug=slugify(payload.name),
@@ -1510,6 +1434,7 @@ def _create_osm_venue(payload: VenueFromOSMSchema):
         latitude=payload.latitude,
         longitude=payload.longitude,
         canonical_url=payload.website,
+        events_urls=events_urls,
         phone=payload.phone,
         opening_hours_raw=payload.opening_hours,
         operator=payload.operator,
@@ -1559,6 +1484,13 @@ def _update_osm_venue(venue: Venue, payload: VenueFromOSMSchema):
         elif new_value != old_value:
             setattr(venue, model_field, new_value)
             changes.append(payload_field)
+
+    # Handle events_url - add to list if not already present
+    if payload.events_url:
+        current_urls = venue.events_urls or []
+        if payload.events_url not in current_urls:
+            venue.events_urls = current_urls + [payload.events_url]
+            changes.append('events_url')
 
     if changes:
         venue.save()

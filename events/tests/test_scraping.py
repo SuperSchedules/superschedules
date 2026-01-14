@@ -5,7 +5,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from model_bakery import baker
 
-from events.models import SiteStrategy, ScrapingJob, Event, ServiceToken, Source
+from events.models import SiteStrategy, ScrapingJob, Event, ServiceToken
+from venues.models import Venue
 
 
 class ScrapingTests(TestCase):
@@ -60,6 +61,11 @@ class ScrapingTests(TestCase):
                     "title": "Test Event",
                     "description": "Desc",
                     "start_time": (timezone.now() + timedelta(days=1)).isoformat(),
+                    "location_data": {
+                        "venue_name": "Test Venue",
+                        "city": "Newton",
+                        "state": "MA",
+                    },
                 }
             ],
             "events_found": 1,
@@ -75,9 +81,8 @@ class ScrapingTests(TestCase):
         job = ScrapingJob.objects.get(id=job_id)
         self.assertEqual(job.status, "completed")
         self.assertEqual(Event.objects.filter(scraping_job=job).count(), 1)
-        source = Source.objects.get(base_url="https://example.com")
         strategy = SiteStrategy.objects.get(domain=domain)
-        self.assertEqual(source.site_strategy, strategy)
+        self.assertIsNotNone(strategy)
 
         # Batch submission
         resp = self.client.post(

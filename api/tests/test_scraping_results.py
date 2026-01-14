@@ -6,7 +6,8 @@ from rest_framework.test import APIClient
 from model_bakery import baker
 
 from api.views import router
-from events.models import Event, Source, SiteStrategy, ScrapingJob, ServiceToken
+from events.models import Event, SiteStrategy, ScrapingJob, ServiceToken
+from venues.models import Venue
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -41,14 +42,16 @@ class SaveScrapeResultsTests(TestCase):
                     "affiliate_link": "https://affiliate.example.com/001",
                     "revenue_source": "partner_program",
                     "commission_rate": 5.5,
-                    "affiliate_tracking_id": "track_123"
+                    "affiliate_tracking_id": "track_123",
+                    "location_data": {"venue_name": "Concert Hall", "city": "Boston", "state": "MA"}
                 },
                 {
                     "external_id": "evt_002",
                     "title": "Art Workshop",
                     "description": "Learn watercolor",
                     "start_time": "2024-07-20T14:00:00Z",
-                    "metadata_tags": ["art"]
+                    "metadata_tags": ["art"],
+                    "location_data": {"venue_name": "Art Center", "city": "Cambridge", "state": "MA"}
                 }
             ]
         }
@@ -99,59 +102,57 @@ class SaveScrapeResultsTests(TestCase):
         assert self.job.events_found == 0
         assert self.job.completed_at is not None
 
-    def test_creates_new_source_for_domain(self):
-        assert not Source.objects.filter(base_url="https://example.com").exists()
-
+    def test_creates_event_from_job(self):
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
-                             "start_time": "2024-07-15T18:00:00Z"}]}
+                             "start_time": "2024-07-15T18:00:00Z",
+                             "location_data": {"venue_name": "Test Venue", "city": "Newton", "state": "MA"}}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
         assert response.status_code == 200
-        assert Source.objects.filter(base_url="https://example.com").exists()
+        event = Event.objects.get(external_id="evt_001")
+        assert event.title == "Event"
+        assert event.venue is not None
+        assert event.venue.name == "Test Venue"
 
-        source = Source.objects.get(base_url="https://example.com")
-        assert source.user == self.user
-        assert source.search_method == Source.SearchMethod.MANUAL
-        assert source.site_strategy == self.strategy
-
-    def test_reuses_existing_source(self):
-        existing_source = baker.make(Source, base_url="https://example.com", user=self.user)
+    def test_reuses_existing_venue(self):
+        existing_venue = Venue.objects.create(name="Test Venue", slug="test-venue", city="Newton", state="MA")
 
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
-                             "start_time": "2024-07-15T18:00:00Z"}]}
+                             "start_time": "2024-07-15T18:00:00Z",
+                             "location_data": {"venue_name": "Test Venue", "city": "Newton", "state": "MA"}}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
         assert response.status_code == 200
-        assert Source.objects.filter(base_url="https://example.com").count() == 1
+        assert Venue.objects.filter(name="Test Venue", city="Newton").count() == 1
 
         event = Event.objects.first()
-        assert event.source == existing_source
+        assert event.venue == existing_venue
 
-    def test_updates_source_strategy_if_changed(self):
-        existing_source = baker.make(Source, base_url="https://example.com", site_strategy=None)
-
+    def test_creates_venue_from_location_data(self):
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_001", "title": "Event", "description": "Desc",
-                             "start_time": "2024-07-15T18:00:00Z"}]}
+                             "start_time": "2024-07-15T18:00:00Z",
+                             "location_data": {"venue_name": "New Venue", "city": "Cambridge", "state": "MA"}}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
         assert response.status_code == 200
 
-        existing_source.refresh_from_db()
-        assert existing_source.site_strategy == self.strategy
+        venue = Venue.objects.get(name="New Venue", city="Cambridge")
+        assert venue is not None
 
     def test_optional_event_fields(self):
         payload = {"success": True, "events_found": 1, "pages_processed": 1,
                   "events": [{"external_id": "evt_min", "title": "Minimal Event", "description": "Description",
-                             "start_time": "2024-07-15T18:00:00Z"}]}
+                             "start_time": "2024-07-15T18:00:00Z",
+                             "location_data": {"venue_name": "Test Venue", "city": "Newton", "state": "MA"}}]}
 
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
@@ -262,8 +263,8 @@ class SaveScrapeResultsTests(TestCase):
         assert event.venue.name == "Town Hall"
         assert event.venue.city == "Wellesley"
 
-    def test_event_without_location_data(self):
-        """Test that events without location_data still work (venue will be None)."""
+    def test_event_without_location_data_is_skipped(self):
+        """Test that events without location_data are skipped (venue is now required)."""
         payload = {
             "success": True,
             "events_found": 1,
@@ -281,13 +282,12 @@ class SaveScrapeResultsTests(TestCase):
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
+        # Job completes but event is not created since venue cannot be determined
         assert response.status_code == 200
-        event = Event.objects.get(external_id="evt_no_venue")
-        assert event.venue is None
-        assert event.room_name == ""
+        assert Event.objects.filter(external_id="evt_no_venue").count() == 0
 
-    def test_event_with_empty_location_data(self):
-        """Test that events with empty location_data dict don't crash."""
+    def test_event_with_empty_location_data_is_skipped(self):
+        """Test that events with empty location_data dict are skipped (venue is required)."""
         payload = {
             "success": True,
             "events_found": 1,
@@ -306,12 +306,12 @@ class SaveScrapeResultsTests(TestCase):
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
-        event = Event.objects.get(external_id="evt_empty_loc")
-        assert event.venue is None
+        # Job completes but event is skipped since venue cannot be determined
+        assert response.status_code == 200
+        assert Event.objects.filter(external_id="evt_empty_loc").count() == 0
 
-    def test_event_with_partial_location_data_missing_city(self):
-        """Test that location_data without city doesn't create venue."""
+    def test_event_with_partial_location_data_missing_city_is_skipped(self):
+        """Test that location_data without city skips the event (venue cannot be created)."""
         payload = {
             "success": True,
             "events_found": 1,
@@ -332,9 +332,9 @@ class SaveScrapeResultsTests(TestCase):
         response = self.client.post(f"/scrape/{self.job.id}/results", json=payload,
                                     headers={"Authorization": f"Bearer {self.service_token.token}"})
 
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.json()}"
-        event = Event.objects.get(external_id="evt_no_city")
-        assert event.venue is None  # No venue without city
+        # Job completes but event is skipped since venue cannot be determined without city
+        assert response.status_code == 200
+        assert Event.objects.filter(external_id="evt_no_city").count() == 0
 
     def test_event_with_null_values_in_location_data(self):
         """Test that null values in location_data don't crash."""

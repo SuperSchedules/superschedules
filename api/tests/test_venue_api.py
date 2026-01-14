@@ -11,7 +11,7 @@ from django.utils import timezone
 from datetime import timedelta
 from model_bakery import baker
 
-from events.models import Event, Source, ServiceToken
+from events.models import Event, ServiceToken
 from venues.models import Venue
 from api.views import EventSchema, VenueSchema
 
@@ -60,7 +60,6 @@ class EventSchemaVenueTest(TestCase):
     """Test EventSchema includes venue and room_name fields."""
 
     def setUp(self):
-        self.source = baker.make(Source)
         self.venue = baker.make(
             Venue,
             name="Newton Free Library",
@@ -69,11 +68,16 @@ class EventSchemaVenueTest(TestCase):
             state="MA",
             postal_code="02459",
         )
+        self.online_venue = baker.make(
+            Venue,
+            name="Online Event Space",
+            city="Virtual",
+            state="",
+        )
         self.event_with_venue = baker.make(
             Event,
             title="Story Time",
             description="Kids story time",
-            source=self.source,
             venue=self.venue,
             room_name="Children's Room",
             start_time=timezone.now() + timedelta(days=1),
@@ -82,8 +86,7 @@ class EventSchemaVenueTest(TestCase):
             Event,
             title="Virtual Event",
             description="Online workshop",
-            source=self.source,
-            venue=None,
+            venue=self.online_venue,
             room_name="",
             start_time=timezone.now() + timedelta(days=2),
         )
@@ -105,11 +108,12 @@ class EventSchemaVenueTest(TestCase):
 
         self.assertEqual(schema.room_name, "Children's Room")
 
-    def test_event_schema_handles_null_venue(self):
-        """Test EventSchema handles events without venue."""
+    def test_event_schema_handles_minimal_venue(self):
+        """Test EventSchema handles events with minimal venue."""
         schema = EventSchema.from_orm(self.event_without_venue)
 
-        self.assertIsNone(schema.venue)
+        self.assertIsNotNone(schema.venue)
+        self.assertEqual(schema.venue.name, "Online Event Space")
         self.assertEqual(schema.room_name, "")
 
     def test_event_schema_still_includes_location_string(self):
@@ -172,7 +176,6 @@ class VenueEnrichmentAPITest(TestCase):
 
     def setUp(self):
         self.service_token = baker.make(ServiceToken)
-        self.source = baker.make(Source)
 
         # Venue with venue_kind but missing enrichment (needs enrichment)
         self.venue_needing_enrichment = baker.make(
@@ -217,7 +220,6 @@ class VenueEnrichmentAPITest(TestCase):
                 title=f"Event {i}",
                 description=f"Description {i}",
                 venue=self.venue_needing_enrichment,
-                source=self.source,
                 start_time=timezone.now() + timedelta(days=i),
             )
 

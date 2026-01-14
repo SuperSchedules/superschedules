@@ -107,6 +107,10 @@ class Venue(models.Model):
     # Venue content (enrichment)
     website_url = models.URLField(null=True, blank=True, help_text="Venue's official website URL")
     website_url_confidence = models.FloatField(null=True, blank=True, help_text="Confidence in website_url (0-1)")
+
+    # Event scraping URLs (from Navigator)
+    events_urls = models.JSONField(default=list, blank=True, help_text="List of event calendar URLs for this venue")
+
     description = models.TextField(blank=True, help_text="General venue description for RAG")
     kids_summary = models.TextField(blank=True, help_text="Kid-focused venue summary for RAG")
 

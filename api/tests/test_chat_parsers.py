@@ -4,7 +4,7 @@ from django.utils import timezone
 from model_bakery import baker
 
 from api import views as api_views
-from events.models import Event, Source
+from events.models import Event
 from venues.models import Venue
 
 
@@ -98,7 +98,6 @@ class ChatParsersTests(TestCase):
 
 class GetRelevantEventIdsTests(TestCase):
     def setUp(self):
-        self.source = baker.make(Source, name="Test Source")
         now = timezone.now()
 
         # Create venues for different cities
@@ -106,21 +105,21 @@ class GetRelevantEventIdsTests(TestCase):
         self.boston_venue = baker.make(Venue, name="Boston Center", city="Boston", state="MA")
         self.cambridge_venue = baker.make(Venue, name="Cambridge Hall", city="Cambridge", state="MA")
 
-        self.today_newton = baker.make(Event, source=self.source, title="Today Newton Event", venue=self.newton_venue,
+        self.today_newton = baker.make(Event, title="Today Newton Event", venue=self.newton_venue,
                                        start_time=now.replace(hour=14, minute=0))
-        self.today_boston = baker.make(Event, source=self.source, title="Today Boston Event", venue=self.boston_venue,
+        self.today_boston = baker.make(Event, title="Today Boston Event", venue=self.boston_venue,
                                        start_time=now.replace(hour=15, minute=0))
 
         tomorrow = now + timedelta(days=1)
-        self.tomorrow_newton = baker.make(Event, source=self.source, title="Tomorrow Newton Event",
+        self.tomorrow_newton = baker.make(Event, title="Tomorrow Newton Event",
                                          venue=self.newton_venue, start_time=tomorrow.replace(hour=10, minute=0))
 
         next_week = now + timedelta(days=5)
-        self.next_week_cambridge = baker.make(Event, source=self.source, title="Next Week Cambridge Event",
+        self.next_week_cambridge = baker.make(Event, title="Next Week Cambridge Event",
                                              venue=self.cambridge_venue, start_time=next_week.replace(hour=11, minute=0))
 
         far_future = now + timedelta(days=60)
-        self.far_future_event = baker.make(Event, source=self.source, title="Far Future Event", venue=self.newton_venue,
+        self.far_future_event = baker.make(Event, title="Far Future Event", venue=self.newton_venue,
                                           start_time=far_future.replace(hour=12, minute=0))
 
     def test_filter_by_location(self):
@@ -162,7 +161,7 @@ class GetRelevantEventIdsTests(TestCase):
     def test_limit_to_three_results(self):
         now = timezone.now()
         for i in range(5):
-            baker.make(Event, source=self.source, title=f"Extra Event {i}", venue=self.boston_venue,
+            baker.make(Event, title=f"Extra Event {i}", venue=self.boston_venue,
                       start_time=now.replace(hour=10+i, minute=0))
 
         result = api_views._get_relevant_event_ids(ages=None, location=None, timeframe="today", user=None)

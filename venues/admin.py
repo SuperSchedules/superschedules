@@ -119,6 +119,54 @@ def rerun_enrichment_keep_website(modeladmin, request, queryset):
 rerun_enrichment_keep_website.short_description = "Re-run enrichment (keep website, regenerate descriptions)"
 
 
+def queue_venue_scraping(modeladmin, request, queryset):
+    """
+    Queue scraping jobs for venues with events_urls.
+
+    Creates ScrapingJob entries for each events_url on selected venues.
+    Jobs will be picked up by the collector worker.
+    """
+    from events.models import ScrapingJob
+    from urllib.parse import urlparse
+
+    queued = 0
+    skipped = 0
+    no_urls = 0
+
+    for venue in queryset:
+        if not venue.events_urls:
+            no_urls += 1
+            continue
+
+        for events_url in venue.events_urls:
+            # Check for existing pending/processing job
+            existing = ScrapingJob.objects.filter(
+                url=events_url,
+                status__in=['pending', 'processing']
+            ).exists()
+
+            if existing:
+                skipped += 1
+                continue
+
+            # Create new job
+            parsed = urlparse(events_url)
+            ScrapingJob.objects.create(
+                url=events_url,
+                domain=parsed.netloc,
+                status='pending',
+                venue=venue,
+                priority=5,
+            )
+            queued += 1
+
+    modeladmin.message_user(
+        request,
+        f"Queued {queued} scraping jobs. Skipped {skipped} (already pending). {no_urls} venues have no events_urls."
+    )
+queue_venue_scraping.short_description = "Queue scraping for selected venues"
+
+
 class VenueHoursInline(admin.TabularInline):
     """Inline display of venue hours."""
     model = VenueHours
@@ -191,13 +239,13 @@ class VenueAdmin(admin.ModelAdmin):
     search_fields = ['name', 'city', 'state', 'street_address', 'source_domain', 'description']
     readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at', 'data_quality_indicator']
     ordering = ['-created_at']
-    actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses, rerun_enrichment, rerun_enrichment_keep_website]
+    actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses, rerun_enrichment, rerun_enrichment_keep_website, queue_venue_scraping]
     inlines = [VenueHoursInline]
     list_per_page = 50
 
     fieldsets = (
         ('Venue Identity', {
-            'fields': ('name', 'slug', 'website_url', 'canonical_url')
+            'fields': ('name', 'slug', 'website_url', 'events_urls', 'canonical_url')
         }),
         ('Classification', {
             'fields': ('venue_kind', 'venue_kind_confidence', 'venue_name_quality'),

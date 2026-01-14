@@ -8,16 +8,17 @@ from datetime import datetime, timezone
 from django.test import TestCase
 from model_bakery import baker
 
-from events.models import Event, Source
+from events.models import Event
+from venues.models import Venue
 from api.rag_service import EventRAGService
 
 
 class RagSignalTests(TestCase):
     """Test RAG embedding generation via post_save signals."""
-    
+
     def setUp(self):
         """Set up test data."""
-        self.test_source = baker.make(Source, name="Test Source")
+        self.test_venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
         
         # Mock the RAG service to avoid actual ML model loading in tests
         self.rag_service_patcher = unittest.mock.patch('api.rag_service.get_rag_service')
@@ -35,7 +36,7 @@ class RagSignalTests(TestCase):
         """Test that creating a new event triggers embedding generation."""
         # Create a new event
         event = Event.objects.create(
-            source=self.test_source,
+            venue=self.test_venue,
             external_id="test_001",
             title="Kids Soccer Practice",
             description="Soccer for ages 5-10",
@@ -52,7 +53,7 @@ class RagSignalTests(TestCase):
         # Create event with mock embedding
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             embedding=[0.1] * 384  # Mock embedding
         )
         
@@ -70,7 +71,7 @@ class RagSignalTests(TestCase):
         # Create event with mock embedding
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             embedding=[0.1] * 384
         )
         
@@ -88,7 +89,7 @@ class RagSignalTests(TestCase):
         # Create event with mock embedding
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             title="Original Title",
             embedding=[0.1] * 384
         )
@@ -109,7 +110,7 @@ class RagSignalTests(TestCase):
         """Test that updating description field triggers embedding regeneration."""
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             description="Original description",
             embedding=[0.1] * 384
         )
@@ -127,7 +128,7 @@ class RagSignalTests(TestCase):
         """Test that updating room_name field triggers embedding regeneration."""
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             room_name="Original Room",
             embedding=[0.1] * 384
         )
@@ -145,7 +146,7 @@ class RagSignalTests(TestCase):
         """Test that updating start_time field triggers embedding regeneration."""
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             start_time=datetime(2024, 9, 1, 10, 0, tzinfo=timezone.utc),
             embedding=[0.1] * 384
         )
@@ -163,7 +164,7 @@ class RagSignalTests(TestCase):
         """Test that updating multiple content fields triggers embedding generation once."""
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             title="Original Title",
             description="Original description",
             embedding=[0.1] * 384
@@ -185,7 +186,7 @@ class RagSignalTests(TestCase):
         # Create event without embedding
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             embedding=None
         )
         
@@ -203,7 +204,7 @@ class RagSignalTests(TestCase):
         """Test that updating both content and non-content fields triggers embedding."""
         event = baker.make(
             Event,
-            source=self.test_source,
+            venue=self.test_venue,
             title="Original Title",
             embedding=[0.1] * 384
         )
@@ -225,7 +226,7 @@ class RagSignalTests(TestCase):
         
         # Create event - should not crash despite RAG service error
         event = Event.objects.create(
-            source=self.test_source,
+            venue=self.test_venue,
             external_id="test_error",
             title="Test Event",
             description="Test description",

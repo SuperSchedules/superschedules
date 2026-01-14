@@ -5,7 +5,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from model_bakery import baker
 
-from events.models import Source, Event, ServiceToken
+from events.models import Event, ServiceToken
+from venues.models import Venue
 
 
 class EventAPITests(TestCase):
@@ -33,13 +34,13 @@ class EventAPITests(TestCase):
 
     def test_event_date_filtering(self):
         self.authenticate()
-        source = baker.make(Source, user=self.user)
+        venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
         now = timezone.now()
         past_event = baker.make(
-            Event, source=source, start_time=now - timedelta(days=1)
+            Event, venue=venue, start_time=now - timedelta(days=1)
         )
         future_event = baker.make(
-            Event, source=source, start_time=now + timedelta(days=1)
+            Event, venue=venue, start_time=now + timedelta(days=1)
         )
 
         resp = self.client.get("/api/v1/events")
@@ -78,9 +79,9 @@ class EventCRUDTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         jwt = resp.data["access"]
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {jwt}")
-        source = baker.make(Source, user=baker.make(get_user_model()))
+        venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
         payload = {
-            "source_id": source.id,
+            "venue_id": venue.id,
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
@@ -90,9 +91,9 @@ class EventCRUDTests(TestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_invalid_service_token_cannot_create_event(self):
-        source = baker.make(Source, user=baker.make(get_user_model()))
+        venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
         payload = {
-            "source_id": source.id,
+            "venue_id": venue.id,
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
@@ -110,14 +111,19 @@ class EventCRUDTests(TestCase):
 
     def test_service_token_full_crud(self):
         self.auth_service()
-        source = baker.make(Source, user=baker.make(get_user_model()))
+        venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
         payload = {
-            "source_id": source.id,
+            "venue_id": venue.id,
             "external_id": "ext1",
             "title": "Ev",
             "description": "Desc",
             "start_time": timezone.now().isoformat(),
             "metadata_tags": ["tag1", "tag2"],
+            "location_data": {
+                "venue_name": venue.name,
+                "city": venue.city,
+                "state": venue.state,
+            },
         }
         resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
@@ -138,7 +144,7 @@ class EventCRUDTests(TestCase):
         self.assertEqual(resp.status_code, 204)
         self.assertFalse(Event.objects.filter(id=event_id).exists())
 
-    def test_create_event_without_source_uses_url(self):
+    def test_create_event_with_location_data(self):
         self.auth_service()
         payload = {
             "external_id": "ext1",
@@ -147,15 +153,22 @@ class EventCRUDTests(TestCase):
             "start_time": timezone.now().isoformat(),
             "url": "https://example.com/event/1",
             "metadata_tags": ["tag1"],
+            "location_data": {
+                "venue_name": "Test Library",
+                "city": "Newton",
+                "state": "MA",
+            },
         }
         resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
-        source = Source.objects.get(base_url="https://example.com")
-        self.assertEqual(Event.objects.get(id=resp.json()["id"]).source, source)
+        event = Event.objects.get(id=resp.json()["id"])
+        self.assertIsNotNone(event.venue)
+        self.assertEqual(event.venue.name, "Test Library")
+        self.assertEqual(event.venue.city, "Newton")
 
+        # Second event at same venue should reuse the venue
         payload["external_id"] = "ext2"
         resp = self.client.post("/api/v1/events", payload, format="json")
         self.assertEqual(resp.status_code, 201)
-        self.assertEqual(
-            Source.objects.filter(base_url="https://example.com").count(), 1
-        )
+        # Venue should be deduplicated
+        self.assertEqual(Venue.objects.filter(name="Test Library", city="Newton").count(), 1)

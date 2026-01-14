@@ -57,7 +57,7 @@ def process_scraping_job(self, job_id: int):
     Args:
         job_id: ID of the ScrapingJob to process
     """
-    from events.models import ScrapingJob, Event, Source
+    from events.models import ScrapingJob, Event
     from django.conf import settings
     import requests
 
@@ -87,14 +87,11 @@ def process_scraping_job(self, job_id: int):
             events_created = 0
 
             if data.get('success') and data.get('events'):
-                source, _ = Source.objects.get_or_create(
-                    base_url=job.url.rsplit('/', 1)[0] if '/' in job.url else job.url,
-                    defaults={'status': 'processed'}
-                )
-
                 for event_data in data['events']:
                     try:
-                        event, was_created = Event.create_with_schema_org_data(event_data, source)
+                        event, was_created = Event.create_with_schema_org_data(
+                            event_data, source_url=job.url, venue=job.venue
+                        )
                         events_created += 1
                         # Queue embedding generation
                         generate_embedding.delay(event.id)
@@ -246,44 +243,13 @@ def cleanup_old_scraping_jobs(days: int = 30):
 
 
 @shared_task
-def mark_source_never_scrape(source_id: int, reason: str):
-    """
-    Mark a source as 'never scrape' based on repeated failures or other conditions.
-
-    Args:
-        source_id: ID of the Source to mark
-        reason: Reason for marking (logged and stored in notes)
-    """
-    from events.models import Source
-
-    try:
-        source = Source.objects.get(id=source_id)
-        source.status = 'never_scrape'
-        source.save()
-
-        # Update site strategy notes if present
-        if source.site_strategy:
-            strategy = source.site_strategy
-            notes = strategy.notes or ''
-            strategy.notes = notes + f"\nMarked never_scrape: {reason} ({timezone.now().isoformat()})"
-            strategy.save()
-
-        logger.info(f"Source {source_id} marked as never_scrape: {reason}")
-        return {'source_id': source_id, 'status': 'marked'}
-
-    except Source.DoesNotExist:
-        logger.warning(f"Source {source_id} not found")
-        return {'source_id': source_id, 'status': 'not_found'}
-
-
-@shared_task
 def generate_daily_stats():
     """
     Generate daily statistics for monitoring.
 
     Periodic task to track system health.
     """
-    from events.models import Event, ScrapingJob, Source
+    from events.models import Event, ScrapingJob
     from venues.models import Venue
 
     today = timezone.now().date()
@@ -299,15 +265,12 @@ def generate_daily_stats():
         'venues': {
             'total': Venue.objects.count(),
             'with_coordinates': Venue.objects.exclude(latitude__isnull=True).count(),
+            'with_events_urls': Venue.objects.exclude(events_urls=[]).count(),
         },
         'scraping': {
             'pending': ScrapingJob.objects.filter(status='pending').count(),
             'completed_yesterday': ScrapingJob.objects.filter(status='completed', completed_at__date=yesterday).count(),
             'failed_yesterday': ScrapingJob.objects.filter(status='failed', completed_at__date=yesterday).count(),
-        },
-        'sources': {
-            'total': Source.objects.count(),
-            'active': Source.objects.filter(status='processed').count(),
         },
     }
 

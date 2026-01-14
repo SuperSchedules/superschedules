@@ -4,7 +4,8 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from model_bakery import baker
 
-from events.models import Event, Source, ServiceToken
+from events.models import Event, ServiceToken
+from venues.models import Venue
 
 
 class EventDetailTests(TestCase):
@@ -19,8 +20,8 @@ class EventDetailTests(TestCase):
         self.svc_token = baker.make(ServiceToken)
         self.svc_client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.svc_token.token}")
 
-        self.source = baker.make(Source, user=self.user)
-        self.event = baker.make(Event, source=self.source)
+        self.venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
+        self.event = baker.make(Event, venue=self.venue)
 
     def test_get_event_with_jwt(self):
         resp = self.jwt_client.get(f"/api/v1/events/{self.event.id}")

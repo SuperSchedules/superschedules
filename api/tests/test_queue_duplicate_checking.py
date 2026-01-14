@@ -7,7 +7,7 @@ from datetime import timedelta
 from model_bakery import baker
 from unittest.mock import Mock
 
-from events.models import Source, ScrapingJob
+from events.models import ScrapingJob
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -37,7 +37,6 @@ class QueueDuplicateCheckingTests(TestCase):
         self.assertEqual(job.status, 'pending')
         self.assertEqual(job.priority, 5)
         self.assertEqual(job.submitted_by, self.user)
-        self.assertIsNotNone(job.source)
 
     def test_returns_existing_pending_job(self):
         """Test that submitting same URL returns existing pending job."""
@@ -180,19 +179,19 @@ class QueueDuplicateCheckingTests(TestCase):
         self.assertEqual(len(result['job_ids']), 3)
         self.assertIn(existing_job.id, result['job_ids'])
 
-    def test_source_creation_on_submit(self):
-        """Test that Source is created when submitting URL."""
+    def test_job_creation_on_submit(self):
+        """Test that ScrapingJob is created when submitting URL."""
         from api.views import submit_scrape, ScrapeRequestSchema
 
-        self.assertEqual(Source.objects.count(), 0)
+        self.assertEqual(ScrapingJob.objects.count(), 0)
 
         request = Mock()
         request.user = self.user
         payload = ScrapeRequestSchema(url='https://example.com/events')
         result = submit_scrape(request, payload)
 
-        # Should have created a Source
-        self.assertEqual(Source.objects.count(), 1)
-        source = Source.objects.first()
-        self.assertEqual(source.base_url, 'https://example.com/events')
-        self.assertEqual(source.user, self.user)
+        # Should have created a ScrapingJob
+        self.assertEqual(ScrapingJob.objects.count(), 1)
+        job = ScrapingJob.objects.first()
+        self.assertEqual(job.url, 'https://example.com/events')
+        self.assertEqual(job.submitted_by, self.user)

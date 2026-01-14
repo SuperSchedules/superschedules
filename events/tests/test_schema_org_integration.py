@@ -12,16 +12,16 @@ from django.core.exceptions import ValidationError
 from model_bakery import baker
 from unittest.mock import patch
 
-from events.models import Event, Source
+from events.models import Event
 from venues.models import Venue
 
 
 class SchemaOrgAPITest(TestCase):
     """Test Schema.org API integration and validate our implementation."""
-    
+
     def setUp(self):
-        """Create test source for events."""
-        self.test_source = baker.make(Source, name="Test Source")
+        """Create test venue for events."""
+        self.test_venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
 
     def test_schema_org_event_specification_compliance(self):
         """Test that our Event model follows Schema.org Event specification."""
@@ -75,7 +75,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
     """Test Event model integration with Venue data from collector."""
 
     def setUp(self):
-        self.test_source = baker.make(Source, name="Test Source")
+        pass  # Events will create venues from location_data
 
     def test_event_creation_with_location_data(self):
         """Test Event creation with collector's location_data format."""
@@ -102,7 +102,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'url': 'https://example.com/event'
         }
 
-        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, source_url="https://example.com")
 
         # Verify event created correctly
         self.assertEqual(event.title, 'Budding Bookworms')
@@ -140,7 +140,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-02T11:00:00+00:00'
         }
 
-        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, source_url="https://example.com")
         location_search_text = event.get_location_search_text()
 
         # Should include room name, venue name, and city for RAG
@@ -166,16 +166,9 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-03T14:00:00+00:00'
         }
 
-        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
-
-        # Low confidence without city - no venue created
-        self.assertIsNone(event.venue)
-        # Without venue, location methods return empty strings
-        self.assertEqual(event.get_location_string(), '')
-        self.assertEqual(event.get_full_address(), '')
-        self.assertEqual(event.get_city(), '')
-        # Raw data is preserved for debugging
-        self.assertEqual(event.raw_location_data['raw_location_string'], 'Town Hall')
+        # Low confidence without city should raise ValueError - venue cannot be determined
+        with self.assertRaises(ValueError):
+            Event.create_with_schema_org_data(event_data, source_url="https://example.com")
     
     def test_event_with_raw_place_json(self):
         """Test that raw_place_json is preserved for re-parsing."""
@@ -208,7 +201,7 @@ class EventSchemaOrgIntegrationTest(TestCase):
             'start_time': '2025-09-04T15:00:00+00:00'
         }
 
-        event, _ = Event.create_with_schema_org_data(event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(event_data, source_url="https://example.com")
 
         # Venue should be created
         self.assertIsNotNone(event.venue)
@@ -223,7 +216,7 @@ class RAGLocationSearchTest(TestCase):
     """Test that Venue integration fixes RAG location searches."""
 
     def setUp(self):
-        self.test_source = baker.make(Source, name="Needham Library")
+        pass  # Events will create venues from location_data
 
     def test_needham_events_rag_query_fix(self):
         """Test that 'events in Needham' query now finds Needham Library events."""
@@ -246,7 +239,7 @@ class RAGLocationSearchTest(TestCase):
             'organizer': 'Needham Public Library'
         }
 
-        event, _ = Event.create_with_schema_org_data(needham_event_data, self.test_source)
+        event, _ = Event.create_with_schema_org_data(needham_event_data, source_url="https://needham.library")
 
         # Test location search capabilities
         location_search_text = event.get_location_search_text()
@@ -293,8 +286,8 @@ class RAGLocationSearchTest(TestCase):
             'start_time': '2025-09-02T14:30:00+00:00'
         }
 
-        event1, _ = Event.create_with_schema_org_data(event1_data, self.test_source)
-        event2, _ = Event.create_with_schema_org_data(event2_data, self.test_source)
+        event1, _ = Event.create_with_schema_org_data(event1_data, source_url="https://needham.library")
+        event2, _ = Event.create_with_schema_org_data(event2_data, source_url="https://needham.library")
 
         # Should share the same Venue object (deduplication)
         self.assertEqual(event1.venue.id, event2.venue.id)

@@ -11,7 +11,7 @@ from ninja_jwt.tokens import AccessToken
 from model_bakery import baker
 
 from api.views import router
-from events.models import Source, ScrapingJob, ServiceToken
+from events.models import ScrapingJob, ServiceToken
 
 User = get_user_model()
 
@@ -181,7 +181,8 @@ class QueueEndpointsTests(TestCase):
                         'start_time': '2025-01-01T10:00:00Z',
                         'end_time': '2025-01-01T12:00:00Z',
                         'url': 'https://example.com/event/123',
-                        'metadata_tags': ['test']
+                        'metadata_tags': ['test'],
+                        'location_data': {'venue_name': 'Test Venue', 'city': 'Newton', 'state': 'MA'}
                     }
                 ],
                 'events_found': 1,
@@ -307,9 +308,9 @@ class QueueEndpointsTests(TestCase):
             self.assertEqual(job.status, 'pending')
             self.assertEqual(job.priority, 7)  # Bulk priority
 
-    def test_source_created_on_submit(self):
-        """Test that Source is created when submitting URL."""
-        self.assertEqual(Source.objects.count(), 0)
+    def test_job_created_on_submit(self):
+        """Test that ScrapingJob is created when submitting URL."""
+        self.assertEqual(ScrapingJob.objects.count(), 0)
 
         response = self.client.post(
             '/queue/submit',
@@ -318,11 +319,11 @@ class QueueEndpointsTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(Source.objects.count(), 1)
+        self.assertEqual(ScrapingJob.objects.count(), 1)
 
-        source = Source.objects.first()
-        self.assertEqual(source.base_url, 'https://example.com/events')
-        self.assertEqual(source.user, self.user)
+        job = ScrapingJob.objects.first()
+        self.assertEqual(job.url, 'https://example.com/events')
+        self.assertEqual(job.submitted_by, self.user)
 
     def test_concurrent_job_claims(self):
         """Test that multiple workers can't claim the same job."""
@@ -369,7 +370,6 @@ class QueueEndpointsTests(TestCase):
         self.assertEqual(job.status, 'pending')
         self.assertEqual(job.priority, 5)
         self.assertEqual(job.submitted_by, self.user)
-        self.assertIsNotNone(job.source)
 
     def test_scrape_endpoint_returns_existing_pending_job(self):
         """Test that submitting same URL returns existing pending job."""

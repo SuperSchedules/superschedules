@@ -9,54 +9,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class Source(models.Model):
-    class Status(models.TextChoices):
-        NOT_RUN = "not_run", "Not run"
-        IN_PROGRESS = "in_progress", "In Progress"
-        PROCESSED = "processed", "Processed"
-
-    class SearchMethod(models.TextChoices):
-        MANUAL = "manual", "Manual scrape"
-        LLM = "llm", "LLM search"
-        CALENDAR = "calendar", "Calendar file"
-
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="sources",
-        null=True,
-        blank=True,
-    )
-    
-    name = models.CharField(max_length=100, blank=True, null=True)
-    base_url = models.URLField(max_length=200, blank=True)
-    site_strategy = models.ForeignKey(
-        'SiteStrategy',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='sources'
-    )
-    search_method = models.CharField(
-        max_length=20,
-        choices=SearchMethod.choices,
-        default=SearchMethod.MANUAL,
-    )
-    status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.NOT_RUN
-    )
-    event = models.ForeignKey(
-        "Event",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="source_submissions",
-    )
-    last_run_at = models.DateTimeField(null=True, blank=True)
-    date_added = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return self.name or self.base_url
+# NOTE: Source model has been removed - Venue is now the first-class citizen
+# Events are linked directly to Venues via events_urls
 
 
 class SiteStrategy(models.Model):
@@ -107,8 +61,8 @@ class ScrapingJob(models.Model):
     max_retries = models.PositiveIntegerField(default=3)
     locked_at = models.DateTimeField(null=True, blank=True)
     locked_by = models.CharField(max_length=100, blank=True)
-    source = models.ForeignKey(
-        Source, null=True, blank=True, on_delete=models.SET_NULL, related_name='scraping_jobs'
+    venue = models.ForeignKey(
+        'venues.Venue', null=True, blank=True, on_delete=models.SET_NULL, related_name='scraping_jobs'
     )
 
     # Cost tracking
@@ -140,12 +94,6 @@ class ScrapeBatch(models.Model):
         return f"Batch {self.id}"
 
 class Event(models.Model):
-    source = models.ForeignKey(
-        Source,
-        on_delete=models.CASCADE,
-        related_name="events",
-        related_query_name="source_event",
-    )
     scraping_job = models.ForeignKey(
         'ScrapingJob', on_delete=models.CASCADE, null=True, blank=True
     )
@@ -153,14 +101,12 @@ class Event(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
 
-    # Structured venue system
+    # Venue is the first-class citizen (required)
     venue = models.ForeignKey(
         'venues.Venue',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
         related_name='events',
-        help_text="Structured venue with normalized address components"
+        help_text="Venue that hosts this event (required)"
     )
     room_name = models.CharField(
         max_length=200,
@@ -252,54 +198,70 @@ class Event(models.Model):
         return ""
     
     @classmethod
-    def create_with_schema_org_data(cls, event_data: dict, source):
+    def create_with_schema_org_data(cls, event_data: dict, venue=None, source_url: str = ""):
         """
         Create or update Event with Venue normalization from collector's location_data.
 
+        Venue-first architecture: Events are deduplicated by (venue, external_id).
+        Venue is required - either pass an existing venue or provide location_data for creation.
+
         Args:
             event_data: Event data from collector with location_data dict
-            source: Source instance
+            venue: Existing Venue instance (optional, will be created from location_data if not provided)
+            source_url: URL being scraped (for domain extraction if no venue provided)
 
         Returns:
             Tuple of (Event instance, was_created boolean)
+
+        Raises:
+            ValueError: If venue cannot be determined/created
         """
         from venues.extraction import normalize_venue_data, get_or_create_venue
         from urllib.parse import urlparse
 
-        # Extract source domain for venue tracking
+        # Determine source domain for venue tracking
         source_domain = ""
-        if source and source.base_url:
+        if source_url:
             try:
-                source_domain = urlparse(source.base_url).netloc
+                source_domain = urlparse(source_url).netloc
             except Exception:
                 pass
 
-        # Get location_data from collector (required format)
-        location_data = event_data.get('location_data')
-        raw_place_json = location_data.get('raw_place_json') if location_data else None
-
-        # Normalize venue data using the pipeline
-        normalized = normalize_venue_data(location_data=location_data, place_json=raw_place_json)
-
-        # Get or create Venue
-        venue_obj = None
+        # Get or create venue
+        venue_obj = venue
         room_name = ""
-        if normalized.get('venue_name') and normalized.get('city'):
-            venue_obj, _ = get_or_create_venue(normalized, source_domain)
-            room_name = normalized.get('room_name', '')[:200]  # Truncate to max_length
 
-        # Create or update event with venue reference
-        # Truncate string fields to match model max_length constraints
+        if not venue_obj:
+            # Get location_data from collector (required format)
+            location_data = event_data.get('location_data')
+            raw_place_json = location_data.get('raw_place_json') if location_data else None
+
+            # Normalize venue data using the pipeline
+            normalized = normalize_venue_data(location_data=location_data, place_json=raw_place_json)
+
+            if normalized.get('venue_name') and normalized.get('city'):
+                venue_obj, _ = get_or_create_venue(normalized, source_domain)
+                room_name = normalized.get('room_name', '')[:200]
+            else:
+                raise ValueError("Cannot create event: venue could not be determined from location_data")
+        else:
+            # Use provided venue, extract room_name from location_data if available
+            location_data = event_data.get('location_data')
+            raw_place_json = location_data.get('raw_place_json') if location_data else None
+            if location_data:
+                normalized = normalize_venue_data(location_data=location_data, place_json=raw_place_json)
+                room_name = normalized.get('room_name', '')[:200]
+
+        # Create or update event - dedup by venue + external_id
         return cls.objects.update_or_create(
-            source=source,
+            venue=venue_obj,
             external_id=event_data.get('external_id', '')[:255],
             defaults={
                 "title": event_data.get('title', '')[:255],
                 "description": event_data.get('description', ''),
-                "venue": venue_obj,
                 "room_name": room_name,
-                "raw_place_json": raw_place_json,
-                "raw_location_data": location_data,
+                "raw_place_json": raw_place_json if not venue else event_data.get('location_data', {}).get('raw_place_json'),
+                "raw_location_data": event_data.get('location_data'),
                 "organizer": event_data.get('organizer', '')[:200],
                 "event_status": event_data.get('event_status', '')[:50],
                 "event_attendance_mode": event_data.get('event_attendance_mode', '')[:50],
@@ -322,7 +284,7 @@ class Event(models.Model):
         )
 
     class Meta:
-        unique_together = ('source', 'external_id')
+        unique_together = ('venue', 'external_id')
         indexes = [
             GinIndex(fields=['description'], name='desc_gin_idx', opclasses=['gin_trgm_ops']),
         ]

@@ -11,7 +11,7 @@ from django.utils import timezone
 from model_bakery import baker
 from ninja_jwt.tokens import AccessToken
 
-from events.models import Event, Source
+from events.models import Event
 from venues.models import Venue
 from locations.models import Location
 
@@ -25,7 +25,6 @@ class EventLocationFilterTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(username="testuser", password="testpass", is_active=True)
-        cls.source = baker.make(Source)
 
         # Create Newton location (42.337807, -71.209182)
         cls.newton = Location.objects.create(
@@ -75,33 +74,37 @@ class EventLocationFilterTest(TestCase):
         cls.newton_event = baker.make(
             Event,
             title="Newton Story Time",
-            source=cls.source,
-            venue=cls.newton_venue,
+                        venue=cls.newton_venue,
             start_time=tomorrow,
         )
 
         cls.cambridge_event = baker.make(
             Event,
             title="Cambridge Story Time",
-            source=cls.source,
-            venue=cls.cambridge_venue,
+                        venue=cls.cambridge_venue,
             start_time=tomorrow,
         )
 
         cls.worcester_event = baker.make(
             Event,
             title="Worcester Story Time",
-            source=cls.source,
-            venue=cls.worcester_venue,
+                        venue=cls.worcester_venue,
             start_time=tomorrow,
         )
 
-        # Event without venue (should not appear in location filtered results)
+        # Event with venue without coordinates (should not appear in location filtered results)
+        cls.online_venue = baker.make(
+            Venue,
+            name="Online Space",
+            city="Virtual",
+            state="",
+            latitude=None,
+            longitude=None,
+        )
         cls.online_event = baker.make(
             Event,
             title="Online Event",
-            source=cls.source,
-            venue=None,
+            venue=cls.online_venue,
             start_time=tomorrow,
         )
 
@@ -124,7 +127,7 @@ class EventLocationFilterTest(TestCase):
         self.assertIn("Cambridge Story Time", titles)
         # Worcester is >10 miles away
         self.assertNotIn("Worcester Story Time", titles)
-        # Online event has no venue, so no coordinates to filter
+        # Online event has venue without coordinates, so excluded from location filter
         self.assertNotIn("Online Event", titles)
 
     def test_location_filter_with_custom_radius(self):
