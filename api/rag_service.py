@@ -143,6 +143,48 @@ class RAGResult:
         return [e.event_data for e in self.recommended_events + self.additional_events]
 
 
+@dataclass
+class RankedVenue:
+    """A venue with its scoring breakdown and tier assignment."""
+    venue_data: Dict[str, Any]
+    final_score: float
+    tier: str  # 'recommended' or 'additional'
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            **self.venue_data,
+            'final_score': round(self.final_score, 3),
+            'tier': self.tier,
+        }
+
+
+@dataclass
+class DualRAGResult:
+    """
+    Complete result from dual venue + event RAG retrieval.
+
+    Provides separate sections for LLM context:
+    - recommended_venues: Top venues matching the query
+    - recommended_events: Top events matching the query
+    """
+    recommended_venues: List[RankedVenue] = field(default_factory=list)
+    recommended_events: List[RankedEvent] = field(default_factory=list)
+    additional_venues: List[RankedVenue] = field(default_factory=list)
+    additional_events: List[RankedEvent] = field(default_factory=list)
+    context_events: List[RankedEvent] = field(default_factory=list)
+    total_venues_considered: int = 0
+    total_events_considered: int = 0
+    search_metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def all_venue_ids(self) -> List[int]:
+        return [v.venue_data['id'] for v in self.recommended_venues + self.additional_venues]
+
+    @property
+    def all_event_ids(self) -> List[int]:
+        return [e.event_data['id'] for e in self.recommended_events + self.additional_events + self.context_events]
+
+
 def clean_html_content(content: str) -> str:
     """Clean HTML entities and tags from content."""
     if not content:
@@ -245,7 +287,72 @@ class EventRAGService:
             "all-ages": "all ages family friendly everyone",
         }
         return expansions.get(age_range, f"ages {age_range}")
-    
+
+    def _create_venue_text(self, venue: 'Venue') -> str:
+        """Create searchable text representation of a venue for embedding."""
+        parts = [clean_html_content(venue.name)]
+
+        if venue.description:
+            parts.append(clean_html_content(venue.description))
+
+        if venue.kids_summary:
+            parts.append(clean_html_content(venue.kids_summary))
+
+        # Venue kind with semantic expansion
+        if venue.venue_kind and venue.venue_kind not in ('other', 'unknown'):
+            venue_kind_expansions = {
+                'library': 'library books reading children storytime programs',
+                'museum': 'museum exhibits art science history learning',
+                'park': 'park outdoor playground nature trails',
+                'playground': 'playground kids play outdoor equipment',
+                'beach': 'beach swimming water sand outdoor',
+                'skating_rink': 'skating rink ice roller skating',
+                'dog_park': 'dog park pets off-leash outdoor',
+                'pool': 'pool swimming aquatics water recreation',
+                'school': 'school education learning classes',
+                'community_center': 'community center classes activities programs',
+                'church': 'church religious worship community',
+                'theater': 'theater performance shows arts entertainment',
+                'restaurant': 'restaurant dining food family',
+                'senior_center': 'senior center elderly programs activities',
+                'ymca': 'ymca fitness recreation sports programs',
+                'sports_facility': 'sports facility athletics recreation games',
+                'nature_center': 'nature center trails wildlife outdoor education',
+                'zoo': 'zoo animals wildlife family children',
+                'aquarium': 'aquarium fish marine animals family children',
+                'town_hall': 'town hall government civic meetings',
+                'city_hall': 'city hall government civic meetings',
+                'government_office': 'government office civic services',
+            }
+            parts.append(venue_kind_expansions.get(venue.venue_kind, venue.venue_kind.replace('_', ' ')))
+
+        # Audience tags (e.g., 'families', 'stroller_friendly', 'wheelchair_accessible')
+        if venue.audience_tags:
+            parts.append(" ".join(venue.audience_tags))
+
+        # Age groups with semantic expansion
+        if venue.audience_age_groups:
+            age_expansions = {
+                'infant': 'infants babies 0-1',
+                'toddler': 'toddlers ages 1-3',
+                'child': 'children kids ages 3-12',
+                'teen': 'teens teenagers ages 13-18',
+                'adult': 'adults grown-ups 18+',
+                'senior': 'seniors elderly 65+',
+            }
+            for group in venue.audience_age_groups:
+                parts.append(age_expansions.get(group, group))
+
+        # Primary audience
+        if venue.audience_primary and venue.audience_primary not in ('general', 'unknown'):
+            parts.append(f"primarily for {venue.audience_primary}")
+
+        # Location context
+        if venue.city and venue.state:
+            parts.append(f"{venue.city} {venue.state}")
+
+        return " ".join(filter(None, parts))
+
     def update_event_embeddings(self, event_ids: List[int] = None):
         """Update embeddings for specified events or all events."""
         # Get events to update
@@ -276,7 +383,36 @@ class EventRAGService:
             event.save(update_fields=['embedding'])
 
         logger.info(f"Updated embeddings for {len(event_list)} events")
-    
+
+    def update_venue_embeddings(self, venue_ids: List[int] = None):
+        """Update embeddings for specified venues or all venues without embeddings."""
+        from venues.models import Venue
+
+        if venue_ids:
+            venues = Venue.objects.filter(id__in=venue_ids)
+        else:
+            venues = Venue.objects.filter(embedding__isnull=True)
+
+        if not venues.exists():
+            logger.info("No venues to update embeddings for")
+            return
+
+        texts = []
+        venue_list = list(venues)
+
+        for venue in venue_list:
+            text = self._create_venue_text(venue)
+            texts.append(text)
+
+        logger.info(f"Computing embeddings for {len(texts)} venues...")
+        new_embeddings = self.embedding_client.encode(texts, use_cache=False)
+
+        for venue, embedding in zip(venue_list, new_embeddings):
+            venue.embedding = embedding.tolist()
+            venue.save(update_fields=['embedding'])
+
+        logger.info(f"Updated embeddings for {len(venue_list)} venues")
+
     def semantic_search(
         self,
         query: str,
@@ -1129,6 +1265,261 @@ class EventRAGService:
             'url': event.url,
             'similarity_score': float(similarity_score),
         }
+
+    def _venue_to_dict(self, venue: 'Venue', similarity_score: float) -> Dict[str, Any]:
+        """Convert venue to dictionary format for API response."""
+        return {
+            'id': venue.id,
+            'name': clean_html_content(venue.name),
+            'description': clean_html_content(venue.description) if venue.description else '',
+            'kids_summary': clean_html_content(venue.kids_summary) if venue.kids_summary else '',
+            'venue_kind': venue.venue_kind or '',
+            'audience_tags': venue.audience_tags or [],
+            'audience_age_groups': venue.audience_age_groups or [],
+            'audience_primary': venue.audience_primary,
+            'city': venue.city,
+            'state': venue.state,
+            'full_address': venue.get_full_address(),
+            'latitude': float(venue.latitude) if venue.latitude else None,
+            'longitude': float(venue.longitude) if venue.longitude else None,
+            'website_url': venue.website_url or '',
+            'similarity_score': float(similarity_score),
+        }
+
+    def venue_semantic_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        max_distance_miles: float = None,
+        user_lat: float = None,
+        user_lng: float = None,
+        venue_kinds: List[str] = None,
+        family_friendly_only: bool = False,
+    ) -> List[Tuple['Venue', float]]:
+        """
+        Perform semantic search for venues using PostgreSQL vector operations.
+
+        Args:
+            query: Natural language search query
+            top_k: Number of results to return
+            max_distance_miles: Max distance from user location
+            user_lat/user_lng: User coordinates
+            venue_kinds: Filter to specific venue types
+            family_friendly_only: Only include family-friendly venues
+
+        Returns:
+            List of (Venue, similarity_score) tuples
+        """
+        import time as perf_time
+        from venues.models import Venue
+        from django.db import connection
+
+        total_start = perf_time.perf_counter()
+
+        embed_start = perf_time.perf_counter()
+        query_embedding = self.embedding_client.encode(query)
+        embed_ms = (perf_time.perf_counter() - embed_start) * 1000
+
+        where_conditions = ["embedding IS NOT NULL"]
+        params = []
+
+        # Geo-distance filter
+        if max_distance_miles and user_lat is not None and user_lng is not None:
+            where_conditions.append("""
+                latitude IS NOT NULL AND longitude IS NOT NULL
+                AND (3959 * acos(
+                    cos(radians(%s)) * cos(radians(latitude)) * cos(radians(longitude) - radians(%s)) +
+                    sin(radians(%s)) * sin(radians(latitude))
+                )) <= %s
+            """)
+            params.extend([user_lat, user_lng, user_lat, max_distance_miles])
+
+        # Venue kind filter
+        if venue_kinds:
+            placeholders = ', '.join(['%s'] * len(venue_kinds))
+            where_conditions.append(f"venue_kind IN ({placeholders})")
+            params.extend(venue_kinds)
+
+        # Family-friendly filter
+        if family_friendly_only:
+            where_conditions.append("""
+                (audience_primary IN ('families', 'children')
+                 OR audience_age_groups::text LIKE '%%infant%%'
+                 OR audience_age_groups::text LIKE '%%toddler%%'
+                 OR audience_age_groups::text LIKE '%%child%%'
+                 OR audience_tags::text LIKE '%%family_friendly%%')
+            """)
+
+        where_clause = " AND ".join(where_conditions)
+        query_embedding_list = query_embedding.tolist()
+
+        sql_start = perf_time.perf_counter()
+        with connection.cursor() as cursor:
+            sql = f'''
+                SELECT id, 1 - (embedding <=> %s::vector) as similarity
+                FROM venues_venue
+                WHERE {where_clause}
+                ORDER BY similarity DESC
+                LIMIT %s
+            '''
+            all_params = [query_embedding_list] + params + [top_k]
+            cursor.execute(sql, all_params)
+            sql_results = cursor.fetchall()
+        sql_ms = (perf_time.perf_counter() - sql_start) * 1000
+
+        venue_ids = [row[0] for row in sql_results]
+        similarity_scores = {row[0]: row[1] for row in sql_results}
+
+        venues = Venue.objects.filter(id__in=venue_ids)
+        venue_dict = {venue.id: venue for venue in venues}
+
+        results = [
+            (venue_dict[venue_id], similarity_scores[venue_id])
+            for venue_id in venue_ids if venue_id in venue_dict
+        ]
+
+        total_ms = (perf_time.perf_counter() - total_start) * 1000
+        logger.info(f"[VENUE RAG PERF] query='{query[:30]}...' embed_ms={embed_ms:.1f}, sql_ms={sql_ms:.1f}, total_ms={total_ms:.1f}, results={len(results)}")
+
+        return results
+
+    def get_context_dual(
+        self,
+        user_message: str,
+        max_venues: int = 5,
+        max_events: int = 10,
+        max_additional_events: int = 15,
+        max_context_events: int = 50,
+        venue_similarity_threshold: float = 0.2,
+        event_similarity_threshold: float = 0.15,
+        scoring_weights: Optional[ScoringWeights] = None,
+        location_id: Optional[int] = None,
+        location: Optional[str] = None,
+        max_distance_miles: Optional[float] = None,
+        user_lat: Optional[float] = None,
+        user_lng: Optional[float] = None,
+        default_state: Optional[str] = None,
+        time_filter_days: Optional[int] = 30,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        is_virtual: Optional[bool] = None,
+        trace: Optional['TraceRecorder'] = None,
+    ) -> DualRAGResult:
+        """
+        Get both relevant venues and events for LLM context.
+
+        Returns separate venue and event sections for clearer LLM prompting.
+        """
+        import time
+        retrieval_start = time.time()
+
+        weights = scoring_weights or ScoringWeights()
+
+        # Resolve location
+        effective_lat = user_lat
+        effective_lng = user_lng
+        resolved_location = None
+
+        if location_id is not None and (effective_lat is None or effective_lng is None):
+            try:
+                from locations.models import Location
+                loc = Location.objects.get(id=location_id)
+                effective_lat = float(loc.latitude)
+                effective_lng = float(loc.longitude)
+                if max_distance_miles is None:
+                    max_distance_miles = 10.0
+                resolved_location = {'id': loc.id, 'name': str(loc), 'source': 'location_id'}
+            except Exception as e:
+                logger.warning(f"Location ID {location_id} lookup failed: {e}")
+
+        if effective_lat is None and location:
+            try:
+                from locations.services import resolve_location
+                result = resolve_location(location, default_state=default_state)
+                if result.matched_location:
+                    effective_lat = float(result.latitude)
+                    effective_lng = float(result.longitude)
+                    if max_distance_miles is None:
+                        max_distance_miles = 10.0
+                    resolved_location = {'id': result.matched_location.id, 'name': result.display_name, 'source': 'string_resolution'}
+            except Exception as e:
+                logger.warning(f"Location resolution failed: {e}")
+
+        # Search venues
+        venue_start = time.time()
+        venue_results = self.venue_semantic_search(
+            query=user_message,
+            top_k=max_venues * 2,
+            max_distance_miles=max_distance_miles,
+            user_lat=effective_lat,
+            user_lng=effective_lng,
+        )
+        venue_ms = int((time.time() - venue_start) * 1000)
+
+        # Search events (use existing tiered method)
+        event_result = self.get_context_events_tiered(
+            user_message=user_message,
+            max_recommended=max_events,
+            max_additional=max_additional_events,
+            max_context=max_context_events,
+            similarity_threshold=event_similarity_threshold,
+            scoring_weights=weights,
+            location_id=location_id,
+            location=location,
+            max_distance_miles=max_distance_miles,
+            user_lat=effective_lat,
+            user_lng=effective_lng,
+            default_state=default_state,
+            time_filter_days=time_filter_days,
+            date_from=date_from,
+            date_to=date_to,
+            is_virtual=is_virtual,
+            trace=trace,
+        )
+
+        # Score and rank venues
+        ranked_venues: List[RankedVenue] = []
+        for venue, similarity_score in venue_results:
+            if similarity_score >= venue_similarity_threshold:
+                venue_data = self._venue_to_dict(venue, similarity_score)
+                tier = 'recommended' if len(ranked_venues) < max_venues else 'additional'
+                ranked_venues.append(RankedVenue(venue_data, similarity_score, tier))
+
+        recommended_venues = [v for v in ranked_venues if v.tier == 'recommended']
+        additional_venues = [v for v in ranked_venues if v.tier == 'additional']
+
+        total_ms = int((time.time() - retrieval_start) * 1000)
+
+        result = DualRAGResult(
+            recommended_venues=recommended_venues,
+            recommended_events=event_result.recommended_events,
+            additional_venues=additional_venues,
+            additional_events=event_result.additional_events,
+            context_events=event_result.context_events,
+            total_venues_considered=len(venue_results),
+            total_events_considered=event_result.total_considered,
+            search_metadata={
+                'query': user_message,
+                'location_used': resolved_location,
+                'venue_search_ms': venue_ms,
+                'total_search_ms': total_ms,
+                'venue_threshold': venue_similarity_threshold,
+                'event_threshold': event_similarity_threshold,
+            },
+        )
+
+        if trace:
+            trace.event('dual_retrieval', {
+                'query': user_message,
+                'venues_found': len(ranked_venues),
+                'events_found': len(event_result.all_events),
+                'recommended_venues': len(recommended_venues),
+                'recommended_events': len(event_result.recommended_events),
+            }, latency_ms=total_ms)
+
+        logger.info(f"Dual retrieval: {len(recommended_venues)} venues, {len(event_result.recommended_events)} events")
+
+        return result
 
 
 # Global RAG service instance

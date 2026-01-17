@@ -22,19 +22,21 @@ def create_event_discovery_prompt(
     context: Dict[str, Any],
     conversation_history: List[Dict[str, str]] = None,
     user_preferences: Dict[str, Any] = None,
+    venues: List[Dict[str, Any]] = None,
     trace: Optional['TraceRecorder'] = None,
 ) -> Tuple[str, str]:
     """Create system and user prompts for event discovery chat with conversation context."""
 
     system_prompt = """You are a friendly, trustworthy local events assistant — like a well-informed neighbor who genuinely wants to help someone find something fun to do nearby.
 
-Your job is to help the user discover events only from the provided event list, explain why they might be a good fit, and guide the conversation when choices are limited.
+Your job is to help the user discover events and venues from the provided lists, explain why they might be a good fit, and guide the conversation when choices are limited.
 
 CORE BEHAVIOR (VERY IMPORTANT)
-- You must ONLY reference events explicitly listed in the "EVENTS YOU CAN RECOMMEND" section.
-- Never invent, guess, or imply the existence of events not in the list.
+- You must ONLY reference events from the "EVENTS YOU CAN RECOMMEND" section and venues from the "RELEVANT VENUES" section.
+- Never invent, guess, or imply the existence of events or venues not in the lists.
 - If something is unclear, ask a short follow-up question instead of assuming.
 - If there are no matching events, say so clearly and help the user refine their search.
+- When relevant venues are provided, you can mention them as places worth exploring even if they don't have specific events listed.
 
 DATE MATCHING (CRITICAL)
 - Pay attention to TODAY'S DATE shown in the context to interpret relative dates correctly.
@@ -180,6 +182,38 @@ Now respond to the user using only the information provided below."""
     # Current message
     user_prompt_parts.append(f'\nUSER SAYS: "{message}"')
 
+    # Relevant venues section (if provided)
+    if venues:
+        user_prompt_parts.append("\n" + "="*50)
+        user_prompt_parts.append("RELEVANT VENUES:")
+        user_prompt_parts.append("="*50)
+        user_prompt_parts.append("[These are places that match the search - they may have multiple events or programs]")
+
+        for i, venue in enumerate(venues[:5], 1):
+            venue_lines = [f"{i}. **{venue.get('name', 'Unknown Venue')}**"]
+
+            if venue.get('venue_kind') and venue['venue_kind'] not in ('other', 'unknown'):
+                venue_lines.append(f"   Type: {venue['venue_kind'].replace('_', ' ').title()}")
+
+            if venue.get('description'):
+                desc = venue['description'][:150] + "..." if len(venue['description']) > 150 else venue['description']
+                venue_lines.append(f"   About: {desc}")
+
+            if venue.get('kids_summary'):
+                kids = venue['kids_summary'][:100] + "..." if len(venue['kids_summary']) > 100 else venue['kids_summary']
+                venue_lines.append(f"   For Kids: {kids}")
+
+            if venue.get('audience_tags'):
+                venue_lines.append(f"   Good for: {', '.join(venue['audience_tags'][:4])}")
+
+            if venue.get('city'):
+                venue_lines.append(f"   Location: {venue['city']}, {venue.get('state', '')}")
+
+            if venue.get('website_url'):
+                venue_lines.append(f"   Website: {venue['website_url']}")
+
+            user_prompt_parts.append("\n".join(venue_lines) + "\n")
+
     # Available events - formatted for easy scanning
     user_prompt_parts.append("\n" + "="*50)
     user_prompt_parts.append("EVENTS YOU CAN RECOMMEND:")
@@ -318,6 +352,32 @@ Now respond to the user using only the information provided below."""
             'chars': len(user_message_text),
             'tokens_est': len(user_message_text) // 4,
         })
+
+        # Venues block (if provided)
+        if venues:
+            venues_start = None
+            for i, part in enumerate(user_prompt_parts):
+                if "RELEVANT VENUES:" in part:
+                    venues_start = i
+                    break
+
+            if venues_start is not None:
+                # Find where venues section ends (at EVENTS YOU CAN RECOMMEND)
+                venues_end = None
+                for i, part in enumerate(user_prompt_parts[venues_start:], venues_start):
+                    if "EVENTS YOU CAN RECOMMEND" in part:
+                        venues_end = i
+                        break
+                if venues_end:
+                    venues_text = "\n".join(user_prompt_parts[venues_start:venues_end])
+                    trace.event('context_block', {
+                        'block_type': 'retrieved_venues',
+                        'text': venues_text,
+                        'chars': len(venues_text),
+                        'tokens_est': len(venues_text) // 4,
+                        'venue_count': len(venues) if venues else 0,
+                        'venue_ids': [v.get('id') for v in venues] if venues else [],
+                    })
 
         # Events block - the main retrieval context
         # Find the events section in user_prompt_parts
