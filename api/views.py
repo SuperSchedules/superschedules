@@ -84,7 +84,7 @@ class VenueEnrichmentSchema(ModelSchema):
         model = Venue
         fields = [
             "id", "name", "street_address", "city", "state", "postal_code",
-            "venue_kind", "website_url", "description", "kids_summary",
+            "category", "venue_kind", "website_url", "description", "kids_summary",
             "enrichment_status", "last_enriched_at"
         ]
 
