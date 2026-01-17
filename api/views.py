@@ -114,23 +114,29 @@ class VenueEnrichmentUpdateSchema(Schema):
 
 
 class VenueFromOSMSchema(Schema):
-    """Schema for POST /api/venues/from-osm/ - create/update venue from OSM data."""
+    """Schema for POST /api/venues/from-osm/ - create/update venue from OSM data.
+
+    All optional fields accept None (null in JSON) to indicate "no data / don't update".
+    On create: None values default to empty string.
+    On update: None values are skipped (field not modified).
+    """
     osm_type: str
     osm_id: int
     name: str
     city: str
-    state: str = ""
-    category: str = ""
-    street_address: str = ""
-    postal_code: str = ""
+    state: str | None = None
+    category: str | None = None
+    venue_kind: str | None = None  # Normalized venue type (library, museum, park, etc.)
+    street_address: str | None = None
+    postal_code: str | None = None
     latitude: float | None = None
     longitude: float | None = None
-    website: str = ""
-    events_url: str = ""  # Event calendar URL from Navigator
-    phone: str = ""
-    opening_hours: str = ""
-    operator: str = ""
-    wikidata: str = ""
+    website: str | None = None
+    events_url: str | None = None  # Event calendar URL from Navigator
+    phone: str | None = None
+    opening_hours: str | None = None
+    operator: str | None = None
+    wikidata: str | None = None
 
 
 class VenueFromOSMResponseSchema(Schema):
@@ -1415,7 +1421,7 @@ def create_or_update_venue_from_osm(request, payload: VenueFromOSMSchema):
 
 
 def _create_osm_venue(payload: VenueFromOSMSchema):
-    """Create a new venue from OSM data."""
+    """Create a new venue from OSM data. None values are stored as NULL in the database."""
     from django.utils.text import slugify
 
     # Build events_urls list if provided
@@ -1427,6 +1433,7 @@ def _create_osm_venue(payload: VenueFromOSMSchema):
         osm_type=payload.osm_type,
         osm_id=payload.osm_id,
         category=payload.category,
+        venue_kind=payload.venue_kind,
         street_address=payload.street_address,
         city=payload.city,
         state=payload.state,
@@ -1448,7 +1455,11 @@ def _create_osm_venue(payload: VenueFromOSMSchema):
 
 
 def _update_osm_venue(venue: Venue, payload: VenueFromOSMSchema):
-    """Update an existing venue from OSM data, tracking changes."""
+    """Update an existing venue from OSM data, tracking changes.
+
+    None values in payload are skipped (field not modified).
+    Only non-None values trigger updates.
+    """
     changes = []
 
     # Map of payload field -> model field
@@ -1466,19 +1477,25 @@ def _update_osm_venue(venue: Venue, payload: VenueFromOSMSchema):
         ('operator', 'operator'),
         ('wikidata', 'wikidata_id'),
         ('category', 'category'),
+        ('venue_kind', 'venue_kind'),
     ]
 
     for payload_field, model_field in updatable_fields:
         new_value = getattr(payload, payload_field)
+
+        # Skip None values - means "don't update this field"
+        if new_value is None:
+            continue
+
         old_value = getattr(venue, model_field)
 
         # Handle decimal comparison for lat/lng
         if model_field in ('latitude', 'longitude'):
-            if new_value is not None and old_value is not None:
+            if old_value is not None:
                 if abs(float(new_value) - float(old_value)) > 0.000001:
                     setattr(venue, model_field, new_value)
                     changes.append(payload_field)
-            elif new_value != old_value:
+            else:
                 setattr(venue, model_field, new_value)
                 changes.append(payload_field)
         elif new_value != old_value:

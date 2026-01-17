@@ -8,6 +8,7 @@ plus enrichment fields for classification, audience, and content.
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
+from pgvector.django import VectorField
 
 
 class Venue(models.Model):
@@ -76,10 +77,10 @@ class Venue(models.Model):
     slug = models.SlugField(max_length=200, db_index=True, help_text="URL-friendly venue identifier")
 
     # Structured address components
-    street_address = models.CharField(max_length=255, blank=True, help_text="Street address (e.g., '735 Main Street')")
+    street_address = models.CharField(max_length=255, blank=True, null=True, help_text="Street address (e.g., '735 Main Street')")
     city = models.CharField(max_length=100, help_text="City name")
-    state = models.CharField(max_length=50, help_text="State/region (abbreviation or full name)")
-    postal_code = models.CharField(max_length=20, blank=True, help_text="ZIP/postal code")
+    state = models.CharField(max_length=50, blank=True, null=True, help_text="State/region (abbreviation or full name)")
+    postal_code = models.CharField(max_length=20, blank=True, null=True, help_text="ZIP/postal code")
     country = models.CharField(max_length=2, default='US', help_text="ISO 3166-1 alpha-2 country code")
 
     # Geocoding
@@ -87,8 +88,8 @@ class Venue(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, help_text="Longitude coordinate")
 
     # Source tracking
-    source_domain = models.CharField(max_length=255, blank=True, help_text="Domain where venue was discovered")
-    canonical_url = models.URLField(blank=True, help_text="Venue's official website")
+    source_domain = models.CharField(max_length=255, blank=True, null=True, help_text="Domain where venue was discovered")
+    canonical_url = models.URLField(blank=True, null=True, help_text="Venue's official website")
 
     # Raw data preservation
     raw_schema = models.JSONField(null=True, blank=True, help_text="Original Schema.org Place data")
@@ -114,6 +115,9 @@ class Venue(models.Model):
     description = models.TextField(blank=True, help_text="General venue description for RAG")
     kids_summary = models.TextField(blank=True, help_text="Kid-focused venue summary for RAG")
 
+    # RAG embedding
+    embedding = VectorField(dimensions=384, blank=True, null=True, help_text="RAG vector embedding for venue semantic search")
+
     # Enrichment metadata
     enrichment_status = models.CharField(max_length=16, choices=ENRICHMENT_STATUS_CHOICES, default="none", help_text="Enrichment status")
     last_enriched_at = models.DateTimeField(null=True, blank=True, help_text="When venue was last enriched")
@@ -123,11 +127,11 @@ class Venue(models.Model):
     osm_id = models.BigIntegerField(blank=True, null=True, help_text="OpenStreetMap element ID")
 
     # OSM-sourced data
-    category = models.CharField(max_length=50, blank=True, help_text="Raw category from OSM (library, museum, park, etc.)")
-    opening_hours_raw = models.TextField(blank=True, help_text="Operating hours in OSM format")
-    operator = models.CharField(max_length=255, blank=True, help_text="Operating organization (e.g., 'Town of Needham')")
-    wikidata_id = models.CharField(max_length=50, blank=True, help_text="Wikidata ID for linked data enrichment")
-    phone = models.CharField(max_length=50, blank=True, help_text="Phone number")
+    category = models.CharField(max_length=50, blank=True, null=True, help_text="Raw category from OSM (library, museum, park, etc.)")
+    opening_hours_raw = models.TextField(blank=True, null=True, help_text="Operating hours in OSM format")
+    operator = models.CharField(max_length=255, blank=True, null=True, help_text="Operating organization (e.g., 'Town of Needham')")
+    wikidata_id = models.CharField(max_length=50, blank=True, null=True, help_text="Wikidata ID for linked data enrichment")
+    phone = models.CharField(max_length=50, blank=True, null=True, help_text="Phone number")
 
     # Track data source
     data_source = models.CharField(max_length=50, default='scraped', help_text="Data source: 'osm', 'scraped', or 'manual'")

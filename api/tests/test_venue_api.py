@@ -639,9 +639,9 @@ class VenueFromOSMAPITest(TestCase):
         self.assertEqual(venue.osm_type, "node")
         self.assertEqual(venue.osm_id, 98765)
         self.assertEqual(venue.data_source, "osm")
-        # Optional fields should be empty/default
-        self.assertEqual(venue.phone, "")
-        self.assertEqual(venue.opening_hours_raw, "")
+        # Optional fields should be None when not provided
+        self.assertIsNone(venue.phone)
+        self.assertIsNone(venue.opening_hours_raw)
 
     def test_osm_venue_sets_website_to_canonical_url(self):
         """Test that website from OSM is stored in canonical_url field."""
@@ -688,3 +688,165 @@ class VenueFromOSMAPITest(TestCase):
         venue = Venue.objects.get(id=response.json()["venue_id"])
         self.assertAlmostEqual(float(venue.latitude), 42.3736, places=4)
         self.assertAlmostEqual(float(venue.longitude), -71.1097, places=4)
+
+    def test_osm_venue_with_null_events_url(self):
+        """Test creating venue with explicit null events_url (Navigator found no events page)."""
+        payload = {
+            "osm_type": "node",
+            "osm_id": 33333,
+            "name": "Park Without Events",
+            "city": "Lexington",
+            "state": "MA",
+            "events_url": None,  # Navigator sends null when no events page found
+            "phone": None,  # Also test other null fields
+            "category": None,
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        venue = Venue.objects.get(id=response.json()["venue_id"])
+        self.assertEqual(venue.name, "Park Without Events")
+        self.assertEqual(venue.events_urls, [])  # No events_urls when none provided
+        # Verify None is stored as NULL, not empty string
+        self.assertIsNone(venue.phone)
+        self.assertIsNone(venue.category)
+
+    def test_osm_venue_with_events_url(self):
+        """Test creating venue with events_url stores it in events_urls list."""
+        payload = {
+            "osm_type": "node",
+            "osm_id": 44444,
+            "name": "Library With Events",
+            "city": "Arlington",
+            "state": "MA",
+            "events_url": "https://arlingtonlibrary.org/events",
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        venue = Venue.objects.get(id=response.json()["venue_id"])
+        self.assertEqual(venue.events_urls, ["https://arlingtonlibrary.org/events"])
+
+    def test_osm_venue_with_venue_kind(self):
+        """Test creating venue with venue_kind stores normalized venue type."""
+        payload = {
+            "osm_type": "way",
+            "osm_id": 55555,
+            "name": "Cary Memorial Library",
+            "city": "Lexington",
+            "state": "MA",
+            "category": "library",
+            "venue_kind": "library",
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        venue = Venue.objects.get(id=response.json()["venue_id"])
+        self.assertEqual(venue.category, "library")
+        self.assertEqual(venue.venue_kind, "library")
+
+    def test_osm_venue_update_adds_venue_kind(self):
+        """Test updating existing venue to add venue_kind."""
+        existing_venue = baker.make(
+            Venue,
+            name="Belmont Library",
+            osm_type="way",
+            osm_id=66666,
+            city="Belmont",
+            state="MA",
+            category="library",
+            venue_kind=None,  # No venue_kind initially
+            data_source="osm",
+        )
+
+        payload = {
+            "osm_type": "way",
+            "osm_id": 66666,
+            "name": "Belmont Library",
+            "city": "Belmont",
+            "state": "MA",
+            "category": "library",
+            "venue_kind": "library",  # Adding venue_kind
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "updated")
+        self.assertIn("venue_kind", data["changes"])
+
+        existing_venue.refresh_from_db()
+        self.assertEqual(existing_venue.venue_kind, "library")
+
+    def test_osm_venue_update_null_values_dont_overwrite(self):
+        """Test that null values in payload don't overwrite existing data."""
+        existing_venue = baker.make(
+            Venue,
+            name="Watertown Library",
+            osm_type="way",
+            osm_id=77777,
+            city="Watertown",
+            state="MA",
+            phone="617-555-1234",
+            category="library",
+            venue_kind="library",
+            street_address="123 Main St",
+            data_source="osm",
+        )
+
+        # Send payload with null for fields that have data - should NOT overwrite
+        payload = {
+            "osm_type": "way",
+            "osm_id": 77777,
+            "name": "Watertown Free Public Library",  # Update name
+            "city": "Watertown",
+            "phone": None,  # Null - should NOT clear existing phone
+            "category": None,  # Null - should NOT clear existing category
+            "venue_kind": None,  # Null - should NOT clear existing venue_kind
+            "street_address": None,  # Null - should NOT clear existing address
+        }
+
+        response = self.client.post(
+            "/api/v1/venues/from-osm/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.service_token.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "updated")
+        # Only name should have changed
+        self.assertEqual(data["changes"], ["name"])
+
+        existing_venue.refresh_from_db()
+        self.assertEqual(existing_venue.name, "Watertown Free Public Library")
+        # These should be preserved
+        self.assertEqual(existing_venue.phone, "617-555-1234")
+        self.assertEqual(existing_venue.category, "library")
+        self.assertEqual(existing_venue.venue_kind, "library")
+        self.assertEqual(existing_venue.street_address, "123 Main St")
