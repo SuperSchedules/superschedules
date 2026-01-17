@@ -1277,14 +1277,31 @@ def get_session_history_for_llm(request, session_id: int, limit: int = 10):
 def list_venues(
     request,
     limit: int = Query(500, description="Max venues to return"),
+    offset: int = Query(0, description="Skip first N records"),
+    category: str | None = Query(None, description="Filter by OSM category (library, museum, park, etc.)"),
+    order: str = Query("-created_at", description="Order by field: id, -id, created_at, -created_at"),
 ):
     """
     Returns all venues for enrichment processing.
     Used by collector service fallback when Phase 2 endpoint returns empty.
+
+    Supports parallel workers via category filter and offset/ordering.
     """
-    qs = Venue.objects.all().order_by('-created_at')
+    qs = Venue.objects.all()
+
+    # Filter by category
+    if category:
+        qs = qs.filter(category__iexact=category)
+
+    # Apply ordering
+    valid_orders = {'id', '-id', 'created_at', '-created_at'}
+    if order in valid_orders:
+        qs = qs.order_by(order)
+    else:
+        qs = qs.order_by('-created_at')
+
     total_count = qs.count()
-    venues = list(qs[:limit])
+    venues = list(qs[offset:offset + limit])
     return {"venues": venues, "total_count": total_count}
 
 
@@ -1292,16 +1309,25 @@ def list_venues(
 def get_venues_needing_enrichment(
     request,
     limit: int = Query(50, description="Max venues to return"),
+    offset: int = Query(0, description="Skip first N records"),
+    category: str | None = Query(None, description="Filter by OSM category (library, museum, park, etc.)"),
+    order: str | None = Query(None, description="Order by field: id, -id (default: -event_count, -created_at)"),
     missing: str | None = Query(None, description="Filter by missing field: website_url, description, kids_summary"),
 ):
     """
     Returns venues that need Phase 2 enrichment.
     Prioritizes venues with venue_kind set (Phase 1 complete) and more events.
+
+    Supports parallel workers via category filter and offset/ordering.
     """
     from django.db.models import Count
 
     # Base query: venues with Phase 1 complete (has venue_kind)
     qs = Venue.objects.exclude(venue_kind__isnull=True).exclude(venue_kind='').exclude(venue_kind='unknown')
+
+    # Filter by category
+    if category:
+        qs = qs.filter(category__iexact=category)
 
     # Filter by specific missing field or any missing enrichment data
     if missing == 'website_url':
@@ -1318,11 +1344,16 @@ def get_venues_needing_enrichment(
             Q(kids_summary='')
         )
 
-    # Annotate with event count and order by most events first (richer context)
-    qs = qs.annotate(event_count=Count('events')).order_by('-event_count', '-created_at')
+    # Apply ordering
+    valid_orders = {'id', '-id', 'created_at', '-created_at'}
+    if order in valid_orders:
+        qs = qs.order_by(order)
+    else:
+        # Default: annotate with event count and order by most events first
+        qs = qs.annotate(event_count=Count('events')).order_by('-event_count', '-created_at')
 
     total_count = qs.count()
-    venues = list(qs[:limit])
+    venues = list(qs[offset:offset + limit])
 
     return {"venues": venues, "total_count": total_count}
 
