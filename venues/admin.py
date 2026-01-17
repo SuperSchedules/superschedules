@@ -267,7 +267,11 @@ class VenueAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
         ('Source Tracking', {
-            'fields': ('source_domain', 'raw_schema'),
+            'fields': ('source_domain', 'data_source', 'raw_schema'),
+            'classes': ('collapse',)
+        }),
+        ('OSM Data', {
+            'fields': ('osm_type', 'osm_id', 'category', 'opening_hours_raw', 'operator', 'wikidata_id', 'phone'),
             'classes': ('collapse',)
         }),
         ('Timestamps', {
