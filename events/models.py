@@ -64,6 +64,20 @@ class ScrapingJob(models.Model):
     venue = models.ForeignKey(
         'venues.Venue', null=True, blank=True, on_delete=models.SET_NULL, related_name='scraping_jobs'
     )
+    scrape_history = models.ForeignKey(
+        'ScrapeHistory', null=True, blank=True, on_delete=models.SET_NULL, related_name='jobs'
+    )
+
+    # Trigger tracking
+    TRIGGERED_BY_CHOICES = [
+        ('periodic', 'Periodic Schedule'),
+        ('manual', 'Manual/Admin'),
+        ('admin_action', 'Admin Action'),
+        ('retry_degraded', 'Retry Degraded'),
+        ('service', 'Service API'),
+    ]
+    triggered_by = models.CharField(max_length=50, choices=TRIGGERED_BY_CHOICES, blank=True)
+    error_category = models.CharField(max_length=50, blank=True)  # timeout, 404, 403, parse_error, etc.
 
     # Cost tracking
     worker_type = models.CharField(max_length=20, blank=True)  # 'local', 'spot_t3_small'
@@ -83,15 +97,101 @@ class ScrapingJob(models.Model):
         return f"{self.url} ({self.status})"
 
 
-class ScrapeBatch(models.Model):
-    submitted_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True
-    )
+class ScrapeHistory(models.Model):
+    """Track scraping history for a venue's event URL."""
+
+    venue = models.ForeignKey('venues.Venue', on_delete=models.CASCADE, related_name='scrape_histories')
+    url = models.URLField(db_index=True)
+    domain = models.CharField(max_length=200)
+
+    # Statistics
+    total_attempts = models.PositiveIntegerField(default=0)
+    successful_attempts = models.PositiveIntegerField(default=0)
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    total_events_found = models.PositiveIntegerField(default=0)
+
+    # Timing
+    first_scraped_at = models.DateTimeField(null=True, blank=True)
+    last_scraped_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    next_scheduled_at = models.DateTimeField(null=True, blank=True)
+
+    # Health status
+    HEALTH_STATUS_CHOICES = [
+        ('healthy', 'Healthy'),
+        ('degraded', 'Degraded'),  # Some failures, will retry
+        ('needs_attention', 'Needs Attention'),  # 5+ failures
+        ('unscrapable', 'Unscrapable'),  # 10+ failures, needs manual fix
+        ('paused', 'Paused'),  # Manually paused
+    ]
+    health_status = models.CharField(max_length=20, choices=HEALTH_STATUS_CHOICES, default='healthy')
+
+    # Error tracking
+    last_error = models.TextField(blank=True)
+    last_error_at = models.DateTimeField(null=True, blank=True)
+    error_category = models.CharField(max_length=50, blank=True)  # timeout, 404, 403, parse_error, etc.
+
+    # For web scrape writing agent
+    agent_notes = models.TextField(blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
-    jobs = models.ManyToManyField(ScrapingJob, related_name="batches")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('venue', 'url')
+        verbose_name_plural = 'Scrape histories'
+        indexes = [
+            models.Index(fields=['health_status']),
+            models.Index(fields=['next_scheduled_at']),
+            models.Index(fields=['domain']),
+        ]
 
     def __str__(self):
-        return f"Batch {self.id}"
+        return f"{self.venue.name}: {self.url} ({self.health_status})"
+
+    def record_attempt(self, success: bool, events_found: int = 0, error_message: str = '', error_category: str = ''):
+        """Record the result of a scraping attempt and update health status."""
+        from django.utils import timezone
+
+        now = timezone.now()
+        self.total_attempts += 1
+        self.last_scraped_at = now
+
+        if not self.first_scraped_at:
+            self.first_scraped_at = now
+
+        if success:
+            self.successful_attempts += 1
+            self.consecutive_failures = 0
+            self.total_events_found += events_found
+            self.last_success_at = now
+            self.health_status = 'healthy'
+            self.last_error = ''
+            self.last_error_at = None
+            self.error_category = ''
+        else:
+            self.consecutive_failures += 1
+            self.last_error = error_message[:1000] if error_message else ''
+            self.last_error_at = now
+            self.error_category = error_category
+
+            # Update health status based on consecutive failures
+            if self.consecutive_failures >= 10:
+                self.health_status = 'unscrapable'
+            elif self.consecutive_failures >= 5:
+                self.health_status = 'needs_attention'
+            elif self.consecutive_failures >= 1:
+                self.health_status = 'degraded'
+
+        self.save()
+
+    @property
+    def success_rate(self) -> float:
+        """Calculate success rate as a percentage."""
+        if self.total_attempts == 0:
+            return 0.0
+        return (self.successful_attempts / self.total_attempts) * 100
+
 
 class Event(models.Model):
     scraping_job = models.ForeignKey(

@@ -53,12 +53,14 @@ def process_scraping_job(self, job_id: int):
     Process a single scraping job via collector API.
 
     Replaces the polling-based queue endpoint pattern.
+    Updates ScrapeHistory with the result.
 
     Args:
         job_id: ID of the ScrapingJob to process
     """
-    from events.models import ScrapingJob, Event
+    from events.models import ScrapingJob, ScrapeHistory, Event
     from django.conf import settings
+    from urllib.parse import urlparse
     import requests
 
     try:
@@ -72,6 +74,16 @@ def process_scraping_job(self, job_id: int):
     job.locked_at = timezone.now()
     job.locked_by = f"celery-{self.request.id}"
     job.save()
+
+    # Ensure we have a ScrapeHistory record
+    if not job.scrape_history and job.venue:
+        parsed = urlparse(job.url)
+        job.scrape_history, _ = ScrapeHistory.objects.get_or_create(
+            venue=job.venue,
+            url=job.url,
+            defaults={'domain': parsed.netloc}
+        )
+        job.save(update_fields=['scrape_history'])
 
     collector_url = getattr(settings, 'COLLECTOR_URL', 'http://localhost:8001')
 
@@ -103,17 +115,37 @@ def process_scraping_job(self, job_id: int):
             job.completed_at = timezone.now()
             job.save()
 
+            # Update ScrapeHistory with success
+            if job.scrape_history:
+                job.scrape_history.record_attempt(success=True, events_found=events_created)
+
             return {'job_id': job_id, 'status': 'completed', 'events': events_created}
         else:
-            raise Exception(f"Collector API error: {response.status_code}")
+            error_msg = f"Collector API error: {response.status_code}"
+            error_cat = categorize_error(error_msg, response.status_code)
+            raise Exception(error_msg)
 
     except Exception as exc:
+        error_msg = str(exc)
+        error_cat = categorize_error(error_msg)
+
         job.retry_count += 1
+        job.error_category = error_cat
+
         if job.retry_count >= job.max_retries:
             job.status = 'failed'
-            job.error_message = str(exc)
+            job.error_message = error_msg
             job.completed_at = timezone.now()
             job.save()
+
+            # Update ScrapeHistory with failure
+            if job.scrape_history:
+                job.scrape_history.record_attempt(
+                    success=False,
+                    error_message=error_msg,
+                    error_category=error_cat
+                )
+
             logger.error(f"Job {job_id} failed permanently: {exc}")
             return {'job_id': job_id, 'status': 'failed'}
         else:
@@ -276,6 +308,180 @@ def generate_daily_stats():
 
     logger.info(f"Daily stats: {stats}")
     return stats
+
+
+@shared_task
+def schedule_venue_scraping():
+    """
+    Weekly task: Create scraping jobs for all healthy venue URLs not scraped recently.
+
+    Runs on Saturday 4 AM. Creates ScrapingJob for each venue.events_urls entry,
+    skipping URLs that are unscrapable/paused or were scraped within MIN_SCRAPE_INTERVAL.
+    Jobs are assigned random priority offsets to spread load over the week.
+    """
+    from events.models import ScrapingJob, ScrapeHistory
+    from venues.models import Venue
+    from urllib.parse import urlparse
+    import random
+
+    MIN_SCRAPE_INTERVAL_DAYS = 3  # Don't re-scrape within 3 days
+    cutoff = timezone.now() - timedelta(days=MIN_SCRAPE_INTERVAL_DAYS)
+
+    queued = 0
+    skipped_recent = 0
+    skipped_unhealthy = 0
+    skipped_pending = 0
+
+    # Get all venues with events_urls
+    venues = Venue.objects.exclude(events_urls=[]).exclude(events_urls__isnull=True)
+
+    for venue in venues.iterator():
+        for events_url in (venue.events_urls or []):
+            parsed = urlparse(events_url)
+            domain = parsed.netloc
+
+            # Get or create ScrapeHistory for this (venue, url)
+            history, _ = ScrapeHistory.objects.get_or_create(
+                venue=venue,
+                url=events_url,
+                defaults={'domain': domain}
+            )
+
+            # Skip if unscrapable or paused
+            if history.health_status in ('unscrapable', 'paused'):
+                skipped_unhealthy += 1
+                continue
+
+            # Skip if recently scraped
+            if history.last_scraped_at and history.last_scraped_at >= cutoff:
+                skipped_recent += 1
+                continue
+
+            # Check for existing pending/processing job
+            existing = ScrapingJob.objects.filter(
+                url=events_url,
+                status__in=['pending', 'processing']
+            ).exists()
+
+            if existing:
+                skipped_pending += 1
+                continue
+
+            # Create job with random priority offset (5-8) to spread load
+            priority = 5 + random.randint(0, 3)
+
+            ScrapingJob.objects.create(
+                url=events_url,
+                domain=domain,
+                status='pending',
+                venue=venue,
+                scrape_history=history,
+                priority=priority,
+                triggered_by='periodic',
+            )
+            queued += 1
+
+    logger.info(
+        f"Scheduled venue scraping: queued={queued}, skipped_recent={skipped_recent}, "
+        f"skipped_unhealthy={skipped_unhealthy}, skipped_pending={skipped_pending}"
+    )
+    return {
+        'queued': queued,
+        'skipped_recent': skipped_recent,
+        'skipped_unhealthy': skipped_unhealthy,
+        'skipped_pending': skipped_pending,
+    }
+
+
+@shared_task
+def retry_degraded_urls():
+    """
+    Daily task: Retry degraded URLs with exponential backoff.
+
+    Runs at 5 AM daily. Finds ScrapeHistory entries with health_status='degraded'
+    or 'needs_attention' and creates retry jobs with exponential backoff based on
+    consecutive_failures count.
+
+    Backoff formula: 1 day * 2^(consecutive_failures - 1), capped at 7 days
+    """
+    from events.models import ScrapingJob, ScrapeHistory
+
+    now = timezone.now()
+    queued = 0
+    skipped_backoff = 0
+    skipped_pending = 0
+
+    # Find degraded or needs_attention histories
+    histories = ScrapeHistory.objects.filter(health_status__in=('degraded', 'needs_attention'))
+
+    for history in histories.iterator():
+        # Calculate backoff: 2^(failures-1) days, max 7 days
+        backoff_days = min(7, 2 ** (history.consecutive_failures - 1))
+        next_retry = history.last_scraped_at + timedelta(days=backoff_days) if history.last_scraped_at else now
+
+        # Skip if not yet time to retry
+        if next_retry > now:
+            skipped_backoff += 1
+            continue
+
+        # Check for existing pending/processing job
+        existing = ScrapingJob.objects.filter(
+            url=history.url,
+            status__in=['pending', 'processing']
+        ).exists()
+
+        if existing:
+            skipped_pending += 1
+            continue
+
+        # Create retry job with higher priority
+        ScrapingJob.objects.create(
+            url=history.url,
+            domain=history.domain,
+            status='pending',
+            venue=history.venue,
+            scrape_history=history,
+            priority=4,  # Higher priority for retries
+            triggered_by='retry_degraded',
+        )
+        queued += 1
+
+    logger.info(f"Retry degraded URLs: queued={queued}, skipped_backoff={skipped_backoff}, skipped_pending={skipped_pending}")
+    return {
+        'queued': queued,
+        'skipped_backoff': skipped_backoff,
+        'skipped_pending': skipped_pending,
+    }
+
+
+def categorize_error(error_message: str, status_code: int | None = None) -> str:
+    """Categorize an error message into a standard error category."""
+    error_lower = error_message.lower() if error_message else ''
+
+    if status_code:
+        if status_code == 404:
+            return '404_not_found'
+        elif status_code == 403:
+            return '403_forbidden'
+        elif status_code == 429:
+            return 'rate_limited'
+        elif status_code >= 500:
+            return 'server_error'
+
+    if 'timeout' in error_lower or 'timed out' in error_lower:
+        return 'timeout'
+    elif 'connection' in error_lower or 'network' in error_lower:
+        return 'connection_error'
+    elif 'parse' in error_lower or 'json' in error_lower or 'decode' in error_lower:
+        return 'parse_error'
+    elif 'no events found' in error_lower or 'empty' in error_lower:
+        return 'no_events_found'
+    elif '404' in error_lower or 'not found' in error_lower:
+        return '404_not_found'
+    elif '403' in error_lower or 'forbidden' in error_lower:
+        return '403_forbidden'
+
+    return 'unknown'
 
 
 @shared_task

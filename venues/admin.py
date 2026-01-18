@@ -10,6 +10,7 @@ from django.utils.html import format_html
 from venues.models import Venue, VenueHours
 from venues.geocoding import geocode_venue
 from venues.extraction import _clean_street_address
+from events.models import ScrapeHistory
 
 
 def geolocate_venues(modeladmin, request, queryset):
@@ -175,6 +176,23 @@ class VenueHoursInline(admin.TabularInline):
     ordering = ['day_of_week']
 
 
+class VenueScrapeHistoryInline(admin.TabularInline):
+    """Inline display of scrape histories for venue's events_urls."""
+    model = ScrapeHistory
+    fk_name = 'venue'
+    extra = 0
+    fields = ['url', 'health_status', 'consecutive_failures', 'last_scraped_at']
+    readonly_fields = ['url', 'health_status', 'consecutive_failures', 'last_scraped_at']
+    ordering = ['-last_scraped_at']
+    max_num = 20
+    can_delete = False
+    verbose_name = 'Scrape History'
+    verbose_name_plural = 'Scrape Histories'
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 class HasGeoFilter(admin.SimpleListFilter):
     """Filter venues by whether they have geocoding."""
     title = 'Has Geocoding'
@@ -240,7 +258,7 @@ class VenueAdmin(admin.ModelAdmin):
     readonly_fields = ['slug', 'created_at', 'updated_at', 'last_enriched_at', 'data_quality_indicator']
     ordering = ['-created_at']
     actions = [geolocate_venues, force_geolocate_venues, cleanup_addresses, rerun_enrichment, rerun_enrichment_keep_website, queue_venue_scraping]
-    inlines = [VenueHoursInline]
+    inlines = [VenueHoursInline, VenueScrapeHistoryInline]
     list_per_page = 50
 
     fieldsets = (

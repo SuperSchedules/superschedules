@@ -22,6 +22,8 @@ class Command(BaseCommand):
         midnight, _ = CrontabSchedule.objects.get_or_create(minute='0', hour='0', day_of_week='*', day_of_month='*', month_of_year='*')
         sunday_2am, _ = CrontabSchedule.objects.get_or_create(minute='0', hour='2', day_of_week='0', day_of_month='*', month_of_year='*')
         daily_3am, _ = CrontabSchedule.objects.get_or_create(minute='0', hour='3', day_of_week='*', day_of_month='*', month_of_year='*')
+        saturday_4am, _ = CrontabSchedule.objects.get_or_create(minute='0', hour='4', day_of_week='6', day_of_month='*', month_of_year='*')
+        daily_5am, _ = CrontabSchedule.objects.get_or_create(minute='0', hour='5', day_of_week='*', day_of_month='*', month_of_year='*')
 
         # Define tasks
         tasks = [
@@ -57,6 +59,18 @@ class Command(BaseCommand):
                 'interval': hourly,
                 'kwargs': json.dumps({'limit': 100}),
                 'description': 'Geocode venues missing coordinates every hour',
+            },
+            {
+                'name': 'Schedule venue scraping',
+                'task': 'events.tasks.schedule_venue_scraping',
+                'crontab': saturday_4am,
+                'description': 'Create scraping jobs for venue URLs (Saturday 4 AM)',
+            },
+            {
+                'name': 'Retry degraded URLs',
+                'task': 'events.tasks.retry_degraded_urls',
+                'crontab': daily_5am,
+                'description': 'Retry URLs with failed scrapes using exponential backoff (daily 5 AM)',
             },
         ]
 

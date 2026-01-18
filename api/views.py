@@ -24,7 +24,6 @@ from events.models import (
     Event,
     SiteStrategy,
     ScrapingJob,
-    ScrapeBatch,
     ChatSession,
     ChatMessage,
 )
@@ -241,10 +240,6 @@ class SiteStrategyUpdateSchema(Schema):
     success: bool | None = None
 
 
-class ScrapeRequestSchema(Schema):
-    url: str
-
-
 class ScrapeResultEventSchema(Schema):
     external_id: str
     title: str
@@ -300,11 +295,6 @@ class ScrapingJobSchema(ModelSchema):
 
 class BatchRequestSchema(Schema):
     urls: List[str]
-
-
-class BatchResponseSchema(Schema):
-    batch_id: int
-    job_ids: List[int]
 
 
 def _verify_turnstile(token: str) -> bool:
@@ -615,103 +605,8 @@ def override_site_strategy(request, domain: str, payload: SiteStrategyUpdateSche
     return strategy
 
 
-@router.post("/scrape", auth=JWTAuth(), response=ScrapingJobSchema)
-def submit_scrape(request, payload: ScrapeRequestSchema):
-    """Submit URL for asynchronous processing (frontend endpoint)."""
-    parsed = urlparse(payload.url)
-    domain = parsed.netloc
-
-    # Check if there's already a pending or processing job for this URL
-    existing_job = ScrapingJob.objects.filter(
-        url=payload.url,
-        status__in=['pending', 'processing']
-    ).first()
-
-    if existing_job:
-        logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
-        return existing_job
-
-    # Check if URL was recently processed successfully (within 14 days)
-    from datetime import timedelta
-    recent_success = ScrapingJob.objects.filter(
-        url=payload.url,
-        status='completed',
-        completed_at__gte=timezone.now() - timedelta(days=14)
-    ).first()
-
-    if recent_success:
-        logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
-        return recent_success
-
-    # Find venue that has this URL in events_urls
-    venue = Venue.objects.filter(events_urls__contains=[payload.url]).first()
-
-    # Create new job for queue (linked to venue if found)
-    job = ScrapingJob.objects.create(
-        url=payload.url,
-        domain=domain,
-        status='pending',
-        submitted_by=request.user,
-        venue=venue,
-        priority=5,  # Normal priority for manual submissions
-        lambda_request_id=str(uuid4()),
-    )
-
-    logger.info(f"Job {job.id} queued for {payload.url}")
-    return job
-
-
-# Batch endpoints MUST be defined before /scrape/{job_id} to avoid route conflicts
-@router.post("/scrape/batch", auth=JWTAuth(), response=BatchResponseSchema)
-def submit_batch(request, payload: BatchRequestSchema):
-    """Submit multiple URLs for batch processing."""
-    batch = ScrapeBatch.objects.create(submitted_by=request.user)
-    job_ids: List[int] = []
-
-    for url in payload.urls:
-        parsed = urlparse(url)
-        domain = parsed.netloc
-
-        # Check for existing pending/processing job
-        existing_job = ScrapingJob.objects.filter(
-            url=url,
-            status__in=['pending', 'processing']
-        ).first()
-
-        if existing_job:
-            batch.jobs.add(existing_job)
-            job_ids.append(existing_job.id)
-            continue
-
-        # Find venue that has this URL in events_urls
-        venue = Venue.objects.filter(events_urls__contains=[url]).first()
-
-        # Create new job with lower priority for batch
-        job = ScrapingJob.objects.create(
-            url=url,
-            domain=domain,
-            status='pending',
-            submitted_by=request.user,
-            venue=venue,
-            priority=7,  # Lower priority for batch submissions
-            lambda_request_id=str(uuid4()),
-        )
-        batch.jobs.add(job)
-        job_ids.append(job.id)
-
-    logger.info(f"Batch {batch.id}: {len(job_ids)} jobs queued")
-    return {"batch_id": batch.id, "job_ids": job_ids}
-
-
-@router.get(
-    "/scrape/batch/{batch_id}",
-    auth=[ServiceTokenAuth(), JWTAuth()],
-    response=List[ScrapingJobSchema],
-)
-def batch_status(request, batch_id: int):
-    """Get status of all jobs in a batch."""
-    batch = get_object_or_404(ScrapeBatch, id=batch_id)
-    return list(batch.jobs.all())
+# NOTE: Frontend scrape endpoints (POST /scrape, POST /scrape/batch, GET /scrape/batch/{id})
+# have been removed. Scraping is now automated via ScrapeHistory and periodic tasks.
 
 
 @router.get(
@@ -792,50 +687,8 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
 # Job Queue Management Endpoints
 
 
-@router.post("/queue/submit", auth=JWTAuth(), response=ScrapingJobSchema)
-def submit_url_to_queue(request, payload: ScrapeRequestSchema):
-    """Submit URL for asynchronous processing."""
-    parsed = urlparse(payload.url)
-    domain = parsed.netloc
-
-    # Check if there's already a pending or processing job for this URL
-    existing_job = ScrapingJob.objects.filter(
-        url=payload.url,
-        status__in=['pending', 'processing']
-    ).first()
-
-    if existing_job:
-        logger.info(f"URL {payload.url} already queued (job {existing_job.id})")
-        return existing_job
-
-    # Check if URL was recently processed successfully (within 14 days)
-    from datetime import timedelta
-    recent_success = ScrapingJob.objects.filter(
-        url=payload.url,
-        status='completed',
-        completed_at__gte=timezone.now() - timedelta(days=14)
-    ).first()
-
-    if recent_success:
-        logger.info(f"URL {payload.url} recently processed (job {recent_success.id})")
-        return recent_success
-
-    # Find venue that has this URL in events_urls
-    venue = Venue.objects.filter(events_urls__contains=[payload.url]).first()
-
-    # Create new job (linked to venue if found)
-    job = ScrapingJob.objects.create(
-        url=payload.url,
-        domain=domain,
-        status='pending',
-        submitted_by=request.user,
-        venue=venue,
-        priority=5
-    )
-
-    logger.info(f"Job {job.id} queued for {payload.url}")
-    return job
-
+# NOTE: Frontend queue endpoints (POST /queue/submit, POST /queue/bulk-submit)
+# have been removed. Use admin actions or periodic tasks for job creation.
 
 @router.get("/queue/next", auth=ServiceTokenAuth(), response=ScrapingJobSchema)
 def get_next_job(request, worker_id: str = Query(...)):
@@ -934,41 +787,6 @@ def queue_status(request):
         "completed_24h": stats['completed_today'],
         "failed_24h": stats['failed_today']
     }
-
-
-@router.post("/queue/bulk-submit", auth=JWTAuth())
-def bulk_submit_urls(request, payload: BatchRequestSchema):
-    """Submit multiple URLs for processing (daily re-scrape use case)."""
-    jobs = []
-    for url in payload.urls:
-        parsed = urlparse(url)
-
-        # Check for existing pending/processing job
-        existing_job = ScrapingJob.objects.filter(
-            url=url,
-            status__in=['pending', 'processing']
-        ).first()
-
-        if existing_job:
-            jobs.append(existing_job)
-            continue
-
-        # Find venue that has this URL in events_urls
-        venue = Venue.objects.filter(events_urls__contains=[url]).first()
-
-        # Create new job with lower priority for bulk
-        job = ScrapingJob.objects.create(
-            url=url,
-            domain=parsed.netloc,
-            status='pending',
-            submitted_by=request.user,
-            venue=venue,
-            priority=7  # Lower priority for bulk
-        )
-        jobs.append(job)
-
-    logger.info(f"Bulk submit: {len(jobs)} jobs queued")
-    return {"submitted": len(jobs), "job_ids": [j.id for j in jobs]}
 
 
 @router.post("/queue/bulk-submit-service", auth=ServiceTokenAuth())
@@ -1313,17 +1131,23 @@ def get_venues_needing_enrichment(
     category: str | None = Query(None, description="Filter by OSM category (library, museum, park, etc.)"),
     order: str | None = Query(None, description="Order by field: id, -id (default: -event_count, -created_at)"),
     missing: str | None = Query(None, description="Filter by missing field: website_url, description, kids_summary"),
+    require_phase1: bool = Query(True, description="Only return venues with Phase 1 complete (venue_kind set)"),
 ):
     """
-    Returns venues that need Phase 2 enrichment.
-    Prioritizes venues with venue_kind set (Phase 1 complete) and more events.
+    Returns venues that need enrichment.
+
+    By default, only returns venues with Phase 1 complete (venue_kind set).
+    Set require_phase1=false to return all venues regardless of Phase 1 status.
 
     Supports parallel workers via category filter and offset/ordering.
     """
     from django.db.models import Count
 
-    # Base query: venues with Phase 1 complete (has venue_kind)
-    qs = Venue.objects.exclude(venue_kind__isnull=True).exclude(venue_kind='').exclude(venue_kind='unknown')
+    qs = Venue.objects.all()
+
+    # Optionally filter to Phase 1 complete venues only
+    if require_phase1:
+        qs = qs.exclude(venue_kind__isnull=True).exclude(venue_kind='').exclude(venue_kind='unknown')
 
     # Filter by category
     if category:
@@ -1333,15 +1157,15 @@ def get_venues_needing_enrichment(
     if missing == 'website_url':
         qs = qs.filter(Q(website_url__isnull=True) | Q(website_url=''))
     elif missing == 'description':
-        qs = qs.filter(description='')
+        qs = qs.filter(Q(description__isnull=True) | Q(description=''))
     elif missing == 'kids_summary':
-        qs = qs.filter(kids_summary='')
+        qs = qs.filter(Q(kids_summary__isnull=True) | Q(kids_summary=''))
     else:
         # Default: any missing enrichment field
         qs = qs.filter(
             Q(website_url__isnull=True) | Q(website_url='') |
-            Q(description='') |
-            Q(kids_summary='')
+            Q(description__isnull=True) | Q(description='') |
+            Q(kids_summary__isnull=True) | Q(kids_summary='')
         )
 
     # Apply ordering
@@ -1546,3 +1370,111 @@ def _update_osm_venue(venue: Venue, payload: VenueFromOSMSchema):
         return 200, {"venue_id": venue.id, "status": "updated", "changes": changes}
     else:
         return 200, {"venue_id": venue.id, "status": "unchanged"}
+
+
+# =============================================================================
+# Scrape History API - For Web Scrape Agent
+# =============================================================================
+
+class ScrapeHistorySchema(Schema):
+    """Schema for scrape history in problematic URLs response."""
+    id: int
+    venue_id: int
+    venue_name: str
+    url: str
+    domain: str
+    health_status: str
+    error_category: str
+    last_error: str
+    consecutive_failures: int
+    total_attempts: int
+    success_rate: float
+    last_scraped_at: datetime | None = None
+    agent_notes: str
+
+
+class ProblematicUrlsResponseSchema(Schema):
+    """Response schema for problematic URLs endpoint."""
+    urls: List[ScrapeHistorySchema]
+    total_count: int
+
+
+class UpdateAgentNotesSchema(Schema):
+    """Schema for updating agent notes on a scrape history."""
+    agent_notes: str
+
+
+@router.get("/scrape/problematic", auth=ServiceTokenAuth(), response=ProblematicUrlsResponseSchema)
+def get_problematic_urls(
+    request,
+    limit: int = Query(50, description="Max URLs to return"),
+    offset: int = Query(0, description="Skip first N records"),
+    error_category: str | None = Query(None, description="Filter by error category"),
+):
+    """
+    Returns URLs with health_status = needs_attention or unscrapable.
+
+    Used by the web scrape writing agent to identify URLs that need manual fixes.
+    """
+    from events.models import ScrapeHistory
+
+    qs = ScrapeHistory.objects.filter(health_status__in=('needs_attention', 'unscrapable'))
+
+    if error_category:
+        qs = qs.filter(error_category=error_category)
+
+    qs = qs.select_related('venue').order_by('-consecutive_failures', '-last_scraped_at')
+
+    total_count = qs.count()
+    histories = list(qs[offset:offset + limit])
+
+    urls = [
+        {
+            'id': h.id,
+            'venue_id': h.venue_id,
+            'venue_name': h.venue.name,
+            'url': h.url,
+            'domain': h.domain,
+            'health_status': h.health_status,
+            'error_category': h.error_category,
+            'last_error': h.last_error[:500] if h.last_error else '',
+            'consecutive_failures': h.consecutive_failures,
+            'total_attempts': h.total_attempts,
+            'success_rate': h.success_rate,
+            'last_scraped_at': h.last_scraped_at,
+            'agent_notes': h.agent_notes,
+        }
+        for h in histories
+    ]
+
+    return {'urls': urls, 'total_count': total_count}
+
+
+@router.patch("/scrape/history/{history_id}/notes", auth=ServiceTokenAuth(), response=ScrapeHistorySchema)
+def update_scrape_history_notes(request, history_id: int, payload: UpdateAgentNotesSchema):
+    """
+    Update agent_notes field for a scrape history.
+
+    Used by the web scrape writing agent to record diagnosis and notes.
+    """
+    from events.models import ScrapeHistory
+
+    history = get_object_or_404(ScrapeHistory, id=history_id)
+    history.agent_notes = payload.agent_notes
+    history.save(update_fields=['agent_notes', 'updated_at'])
+
+    return {
+        'id': history.id,
+        'venue_id': history.venue_id,
+        'venue_name': history.venue.name,
+        'url': history.url,
+        'domain': history.domain,
+        'health_status': history.health_status,
+        'error_category': history.error_category,
+        'last_error': history.last_error[:500] if history.last_error else '',
+        'consecutive_failures': history.consecutive_failures,
+        'total_attempts': history.total_attempts,
+        'success_rate': history.success_rate,
+        'last_scraped_at': history.last_scraped_at,
+        'agent_notes': history.agent_notes,
+    }

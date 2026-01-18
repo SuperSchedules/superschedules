@@ -6,7 +6,7 @@ from django.utils.html import format_html
 import requests
 import logging
 import json
-from .models import Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeBatch, ChatSession, ChatMessage
+from .models import Event, ServiceToken, SiteStrategy, ScrapingJob, ScrapeHistory, ChatSession, ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +54,146 @@ class ScrapingJobAdmin(admin.ModelAdmin):
     actions = [reset_to_pending]
 
 
-@admin.register(ScrapeBatch)
-class ScrapeBatchAdmin(admin.ModelAdmin):
-    list_display = ("id", "submitted_by", "created_at")
+def mark_healthy(modeladmin, request, queryset):
+    """Reset selected scrape histories to healthy status."""
+    count = queryset.update(health_status='healthy', consecutive_failures=0)
+    modeladmin.message_user(request, f"{count} history record(s) marked as healthy.")
+mark_healthy.short_description = "Mark as healthy (reset failures)"
+
+
+def mark_unscrapable(modeladmin, request, queryset):
+    """Mark selected scrape histories as unscrapable."""
+    count = queryset.update(health_status='unscrapable')
+    modeladmin.message_user(request, f"{count} history record(s) marked as unscrapable.")
+mark_unscrapable.short_description = "Mark as unscrapable (stop retrying)"
+
+
+def mark_paused(modeladmin, request, queryset):
+    """Pause scraping for selected URLs."""
+    count = queryset.update(health_status='paused')
+    modeladmin.message_user(request, f"{count} history record(s) paused.")
+mark_paused.short_description = "Pause scraping"
+
+
+def queue_immediate_scrape(modeladmin, request, queryset):
+    """Create immediate scraping jobs for selected URLs."""
+    from urllib.parse import urlparse
+    from django.utils import timezone
+
+    queued = 0
+    skipped = 0
+
+    for history in queryset:
+        # Check for existing pending/processing job
+        existing = ScrapingJob.objects.filter(
+            url=history.url,
+            status__in=['pending', 'processing']
+        ).exists()
+
+        if existing:
+            skipped += 1
+            continue
+
+        # Create new job linked to this history
+        ScrapingJob.objects.create(
+            url=history.url,
+            domain=history.domain,
+            status='pending',
+            venue=history.venue,
+            scrape_history=history,
+            priority=3,  # Higher priority for admin-triggered jobs
+            triggered_by='admin_action',
+        )
+        queued += 1
+
+    modeladmin.message_user(request, f"Queued {queued} jobs. Skipped {skipped} (already pending).")
+queue_immediate_scrape.short_description = "Queue immediate scrape"
+
+
+class ScrapeHistoryJobInline(admin.TabularInline):
+    """Inline showing recent jobs for a ScrapeHistory."""
+    model = ScrapingJob
+    fk_name = 'scrape_history'
+    extra = 0
+    fields = ['status', 'events_found', 'error_message', 'created_at', 'completed_at']
+    readonly_fields = ['status', 'events_found', 'error_message', 'created_at', 'completed_at']
+    ordering = ['-created_at']
+    max_num = 10
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ScrapeHistory)
+class ScrapeHistoryAdmin(admin.ModelAdmin):
+    list_display = [
+        'id', 'venue_link', 'url_short', 'health_status', 'success_rate_display',
+        'consecutive_failures', 'total_attempts', 'last_scraped_at', 'error_category'
+    ]
+    list_filter = ['health_status', 'error_category', 'domain']
+    search_fields = ['url', 'venue__name', 'domain', 'last_error']
+    readonly_fields = [
+        'venue', 'url', 'domain', 'total_attempts', 'successful_attempts',
+        'consecutive_failures', 'total_events_found', 'first_scraped_at',
+        'last_scraped_at', 'last_success_at', 'last_error', 'last_error_at',
+        'created_at', 'updated_at'
+    ]
+    actions = [mark_healthy, mark_unscrapable, mark_paused, queue_immediate_scrape]
+    inlines = [ScrapeHistoryJobInline]
+    ordering = ['-last_scraped_at']
+    list_per_page = 50
+
+    fieldsets = (
+        ('URL Info', {
+            'fields': ('venue', 'url', 'domain')
+        }),
+        ('Statistics', {
+            'fields': ('total_attempts', 'successful_attempts', 'consecutive_failures', 'total_events_found')
+        }),
+        ('Timing', {
+            'fields': ('first_scraped_at', 'last_scraped_at', 'last_success_at', 'next_scheduled_at')
+        }),
+        ('Health', {
+            'fields': ('health_status', 'error_category', 'last_error', 'last_error_at')
+        }),
+        ('Agent Notes', {
+            'fields': ('agent_notes',),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def venue_link(self, obj):
+        """Display venue as a link."""
+        from django.urls import reverse
+        url = reverse('admin:venues_venue_change', args=[obj.venue.id])
+        return format_html('<a href="{}">{}</a>', url, obj.venue.name[:30])
+    venue_link.short_description = 'Venue'
+    venue_link.admin_order_field = 'venue__name'
+
+    def url_short(self, obj):
+        """Display truncated URL."""
+        url = obj.url
+        if len(url) > 50:
+            return url[:50] + '...'
+        return url
+    url_short.short_description = 'URL'
+
+    def success_rate_display(self, obj):
+        """Display success rate with color."""
+        rate = obj.success_rate
+        if rate >= 80:
+            color = '#28a745'
+        elif rate >= 50:
+            color = '#ffc107'
+        else:
+            color = '#dc3545'
+        return format_html('<span style="color: {};">{:.1f}%</span>', color, rate)
+    success_rate_display.short_description = 'Success Rate'
 
 
 class ChatMessageInline(admin.TabularInline):

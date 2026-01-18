@@ -401,7 +401,8 @@ source .venv/bin/activate && DJANGO_SETTINGS_MODULE=config.test_settings pytest 
 - **Auth**: `POST /api/v1/token/`, `POST /api/v1/token/refresh/`
 - **Events**: `GET|POST /api/v1/events/`, `GET|PUT|DELETE /api/v1/events/{id}`
 - **Venues**: `GET /api/v1/venues/`, `POST /api/v1/venues/from-osm/` (Navigator integration)
-- **Scraping**: `POST /api/v1/scrape`, `POST /api/v1/queue/submit`, `POST /api/v1/queue/bulk-submit`
+- **Scraping**: `GET /api/v1/queue/next`, `POST /api/v1/queue/{id}/complete`, `POST /api/v1/queue/bulk-submit-service`
+- **Scrape History**: `GET /api/v1/scrape/problematic`, `PATCH /api/v1/scrape/history/{id}/notes`
 - **Health**: `GET /api/live`, `GET /api/ready`
 - **Admin**: `/admin`
 

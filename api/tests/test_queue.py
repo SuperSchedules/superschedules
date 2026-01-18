@@ -1,5 +1,11 @@
 """
 Tests for job queue management endpoints.
+
+Note: Frontend endpoints (POST /scrape, POST /queue/submit, POST /queue/bulk-submit)
+have been removed. Scraping jobs are now created via:
+- Periodic tasks (schedule_venue_scraping, retry_degraded_urls)
+- Admin actions (queue_venue_scraping, queue_immediate_scrape)
+- Service API (bulk-submit-service)
 """
 from django.test import TestCase
 from django.contrib.auth import get_user_model
@@ -37,36 +43,6 @@ class QueueEndpointsTests(TestCase):
         request = Mock()
         request.auth = self.service_token
         return request
-
-    def test_submit_url_to_queue(self):
-        """Test submitting a URL to the queue."""
-        response = self.client.post(
-            '/queue/submit',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        self.assertEqual(data['url'], 'https://example.com/events')
-        self.assertEqual(data['status'], 'pending')
-        self.assertEqual(data['priority'], 5)
-        self.assertEqual(data['domain'], 'example.com')
-
-        # Verify job was created in database
-        job = ScrapingJob.objects.get(id=data['id'])
-        self.assertEqual(job.status, 'pending')
-        self.assertEqual(job.submitted_by, self.user)
-
-    def test_submit_requires_auth(self):
-        """Test that submit endpoint requires authentication."""
-        response = self.client.post(
-            '/queue/submit',
-            json={'url': 'https://example.com/events'}
-        )
-
-        self.assertEqual(response.status_code, 401)
 
     def test_get_next_job_atomic_claim(self):
         """Test getting next job with atomic claim."""
@@ -282,49 +258,6 @@ class QueueEndpointsTests(TestCase):
         self.assertEqual(data['completed_24h'], 1)
         self.assertEqual(data['failed_24h'], 0)  # Old failure not counted
 
-    def test_bulk_submit_urls(self):
-        """Test bulk URL submission."""
-        urls = [
-            'https://example.com/events1',
-            'https://example.com/events2',
-            'https://example.com/events3'
-        ]
-
-        response = self.client.post(
-            '/queue/bulk-submit',
-            json={'urls': urls},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        self.assertEqual(data['submitted'], 3)
-        self.assertEqual(len(data['job_ids']), 3)
-
-        # Verify all jobs have lower priority (bulk)
-        for job_id in data['job_ids']:
-            job = ScrapingJob.objects.get(id=job_id)
-            self.assertEqual(job.status, 'pending')
-            self.assertEqual(job.priority, 7)  # Bulk priority
-
-    def test_job_created_on_submit(self):
-        """Test that ScrapingJob is created when submitting URL."""
-        self.assertEqual(ScrapingJob.objects.count(), 0)
-
-        response = self.client.post(
-            '/queue/submit',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-
-        job = ScrapingJob.objects.first()
-        self.assertEqual(job.url, 'https://example.com/events')
-        self.assertEqual(job.submitted_by, self.user)
-
     def test_concurrent_job_claims(self):
         """Test that multiple workers can't claim the same job."""
         job = ScrapingJob.objects.create(
@@ -348,181 +281,6 @@ class QueueEndpointsTests(TestCase):
             headers={'Authorization': f'Bearer {self.service_token.token}'}
         )
         self.assertEqual(response2.status_code, 404)
-
-    def test_scrape_endpoint_creates_job(self):
-        """Test that /scrape endpoint creates a new job with queue fields."""
-        self.assertEqual(ScrapingJob.objects.count(), 0)
-
-        response = self.client.post(
-            '/scrape',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Verify job was created
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-        job = ScrapingJob.objects.first()
-
-        self.assertEqual(job.url, 'https://example.com/events')
-        self.assertEqual(job.status, 'pending')
-        self.assertEqual(job.priority, 5)
-        self.assertEqual(job.submitted_by, self.user)
-
-    def test_scrape_endpoint_returns_existing_pending_job(self):
-        """Test that submitting same URL returns existing pending job."""
-        # Create existing pending job
-        existing_job = baker.make(
-            ScrapingJob,
-            url='https://example.com/events',
-            domain='example.com',
-            status='pending',
-            submitted_by=self.user,
-            priority=5
-        )
-
-        response = self.client.post(
-            '/scrape',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should return existing job, not create new one
-        self.assertEqual(data['id'], existing_job.id)
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-
-    def test_scrape_endpoint_returns_existing_processing_job(self):
-        """Test that submitting same URL returns existing processing job."""
-        # Create existing processing job
-        existing_job = baker.make(
-            ScrapingJob,
-            url='https://example.com/events',
-            domain='example.com',
-            status='processing',
-            submitted_by=self.user,
-            locked_by='worker-1'
-        )
-
-        response = self.client.post(
-            '/scrape',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should return existing job
-        self.assertEqual(data['id'], existing_job.id)
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-
-    def test_scrape_endpoint_returns_recent_success(self):
-        """Test that submitting recently completed URL returns that job."""
-        # Create recently completed job (within 24 hours)
-        recent_job = baker.make(
-            ScrapingJob,
-            url='https://example.com/events',
-            domain='example.com',
-            status='completed',
-            submitted_by=self.user,
-            completed_at=timezone.now() - timedelta(hours=12)
-        )
-
-        response = self.client.post(
-            '/scrape',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should return recent job
-        self.assertEqual(data['id'], recent_job.id)
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-
-    def test_scrape_endpoint_creates_new_after_14_days(self):
-        """Test that submitting URL after 14 days creates new job."""
-        # Create old completed job (more than 14 days ago)
-        old_job = baker.make(
-            ScrapingJob,
-            url='https://example.com/events',
-            domain='example.com',
-            status='completed',
-            submitted_by=self.user,
-            completed_at=timezone.now() - timedelta(days=15)
-        )
-
-        response = self.client.post(
-            '/scrape',
-            json={'url': 'https://example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should create new job (old one expired)
-        self.assertNotEqual(data['id'], old_job.id)
-        self.assertEqual(ScrapingJob.objects.count(), 2)
-
-    def test_queue_submit_prevents_duplicates(self):
-        """Test that /queue/submit also prevents duplicate jobs."""
-        # Create existing pending job
-        existing_job = baker.make(
-            ScrapingJob,
-            url='https://library.example.com/events',
-            domain='library.example.com',
-            status='pending',
-            submitted_by=self.user
-        )
-
-        response = self.client.post(
-            '/queue/submit',
-            json={'url': 'https://library.example.com/events'},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should return existing job
-        self.assertEqual(data['id'], existing_job.id)
-        self.assertEqual(ScrapingJob.objects.count(), 1)
-
-    def test_bulk_submit_prevents_duplicates(self):
-        """Test that /queue/bulk-submit prevents duplicate jobs."""
-        # Create existing pending job
-        existing_job = baker.make(
-            ScrapingJob,
-            url='https://example.com/events1',
-            domain='example.com',
-            status='pending',
-            submitted_by=self.user
-        )
-
-        response = self.client.post(
-            '/queue/bulk-submit',
-            json={'urls': [
-                'https://example.com/events1',  # Existing
-                'https://example.com/events2',  # New
-                'https://example.com/events3'   # New
-            ]},
-            headers={'Authorization': f'Bearer {self.jwt_token}'}
-        )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-
-        # Should have 3 jobs total (1 existing + 2 new)
-        self.assertEqual(ScrapingJob.objects.count(), 3)
-        self.assertEqual(len(data['job_ids']), 3)
-        self.assertIn(existing_job.id, data['job_ids'])
 
     def test_complete_job_with_venue_location_data(self):
         """Test completing a job with events that have location_data for venue creation."""
@@ -636,3 +394,124 @@ class QueueEndpointsTests(TestCase):
         self.assertEqual(event.venue.name, "Town Hall")
         self.assertEqual(event.venue.city, "Acton")
         self.assertEqual(event.venue.state, "ME")
+
+    def test_bulk_submit_service(self):
+        """Test bulk submit via service token."""
+        # Create a superuser for the service endpoint
+        admin_user = baker.make(User, username="admin", is_superuser=True)
+
+        urls = [
+            'https://example.com/events1',
+            'https://example.com/events2',
+            'https://example.com/events3'
+        ]
+
+        response = self.client.post(
+            '/queue/bulk-submit-service',
+            json={'urls': urls},
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data['submitted'], 3)
+        self.assertEqual(data['new_jobs'], 3)
+        self.assertEqual(len(data['job_ids']), 3)
+
+        # Verify all jobs have lower priority (bulk)
+        for job_id in data['job_ids']:
+            job = ScrapingJob.objects.get(id=job_id)
+            self.assertEqual(job.status, 'pending')
+            self.assertEqual(job.priority, 7)  # Bulk priority
+            self.assertEqual(job.submitted_by, admin_user)
+
+    def test_bulk_submit_service_prevents_duplicates(self):
+        """Test that bulk-submit-service prevents duplicate jobs."""
+        # Create a superuser for the service endpoint
+        admin_user = baker.make(User, username="admin", is_superuser=True)
+
+        # Create existing pending job
+        existing_job = baker.make(
+            ScrapingJob,
+            url='https://example.com/events1',
+            domain='example.com',
+            status='pending',
+            submitted_by=admin_user
+        )
+
+        response = self.client.post(
+            '/queue/bulk-submit-service',
+            json={'urls': [
+                'https://example.com/events1',  # Existing
+                'https://example.com/events2',  # New
+                'https://example.com/events3'   # New
+            ]},
+            headers={'Authorization': f'Bearer {self.service_token.token}'}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        # Should have 3 jobs total (1 existing + 2 new)
+        self.assertEqual(ScrapingJob.objects.count(), 3)
+        self.assertEqual(data['submitted'], 3)
+        self.assertEqual(data['new_jobs'], 2)
+        self.assertEqual(data['existing_jobs'], 1)
+        self.assertIn(existing_job.id, data['job_ids'])
+
+
+class ScrapingJobModelTests(TestCase):
+    """Tests for ScrapingJob model changes."""
+
+    def setUp(self):
+        self.user = baker.make(User, username="testuser@example.com")
+
+    def test_scraping_job_has_triggered_by_field(self):
+        """Test that ScrapingJob has the new triggered_by field."""
+        job = ScrapingJob.objects.create(
+            url='https://example.com/events',
+            domain='example.com',
+            status='pending',
+            submitted_by=self.user,
+            triggered_by='periodic'
+        )
+
+        self.assertEqual(job.triggered_by, 'periodic')
+
+    def test_scraping_job_has_error_category_field(self):
+        """Test that ScrapingJob has the new error_category field."""
+        job = ScrapingJob.objects.create(
+            url='https://example.com/events',
+            domain='example.com',
+            status='failed',
+            submitted_by=self.user,
+            error_category='timeout'
+        )
+
+        self.assertEqual(job.error_category, 'timeout')
+
+    def test_scraping_job_has_scrape_history_fk(self):
+        """Test that ScrapingJob has the new scrape_history FK."""
+        from events.models import ScrapeHistory
+        from venues.models import Venue
+
+        venue = baker.make(Venue, name="Test Venue", city="Newton", state="MA")
+        history = ScrapeHistory.objects.create(
+            venue=venue,
+            url='https://example.com/events',
+            domain='example.com'
+        )
+
+        job = ScrapingJob.objects.create(
+            url='https://example.com/events',
+            domain='example.com',
+            status='pending',
+            submitted_by=self.user,
+            venue=venue,
+            scrape_history=history,
+            triggered_by='periodic'
+        )
+
+        self.assertEqual(job.scrape_history, history)
+        self.assertEqual(job.scrape_history.venue, venue)
