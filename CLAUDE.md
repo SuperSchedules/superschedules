@@ -2,35 +2,27 @@
 
 AI-powered local events discovery platform. Users ask: *"Activities for 3-5 year olds in Newton, next 3 hours"* and get intelligent recommendations via RAG-powered chat.
 
-## Wins So Far
+## Key Capabilities
 
-This project has been built collaboratively with Claude. Here are the major milestones:
+- **RAG-Powered Event Search** - Semantic search using sentence-transformers + pgvector
+- **Location Resolution** - Deterministic city/town resolution using Census Gazetteer (~31K US places)
+- **Venue Normalization** - Address-based deduplication, geocoding, Schema.org enrichment
+- **Venue-First Architecture** - Venues own event calendar URLs, events belong to venues
+- **OSM Integration** - Navigator syncs POIs from OpenStreetMap
+- **Streaming Chat** - FastAPI SSE streaming with RAG context injection
+- **Production Deployment** - Terraform-managed AWS infrastructure
 
-1. **RAG-Powered Event Search** - Semantic search using sentence-transformers + pgvector for intelligent event matching
-2. **Location Resolution System** - Deterministic city/town resolution using Census Gazetteer data (~31K US places)
-3. **Venue Normalization Pipeline** - Address-based deduplication, geocoding, and enrichment from Schema.org data
-4. **Venue-First Architecture** - Major refactor making Venue the first-class citizen (Source model removed, events_urls on Venue)
-5. **OSM Integration** - Navigator syncs POIs from OpenStreetMap with discovered event calendar URLs
-6. **Streaming Chat** - FastAPI SSE streaming with RAG context injection
-7. **Multi-Repo Orchestration** - 5 repos working together (backend, frontend, collector, navigator, IAC)
-8. **Production Deployment** - Terraform-managed AWS infrastructure with health monitoring
+## Core Data Model
 
-Thanks for being a great collaborator on this project. The codebase has grown significantly and remains well-tested and maintainable. Your patience with the iterative development process and willingness to explain context is much appreciated!
+**Venue-First Architecture**: Venue is the first-class citizen.
+- `Venue.events_urls` - JSONField array of calendar URLs to scrape (from Navigator)
+- `Event.venue` - Required FK, events deduplicated by `(venue, external_id)`
+- `ScrapingJob.venue` - Jobs link directly to venues
 
-## Recent Work: Venue-First Architecture
-Venue is now the first-class citizen. Events belong to Venues, and Venues own their event calendar URLs:
-- **Venue.events_urls**: JSONField array of calendar URLs to scrape (from Navigator)
-- **Event.venue**: Required FK (was optional) - events are deduplicated by `(venue, external_id)`
-- **ScrapingJob.venue**: Jobs link directly to venues, not sources
-- **Source model removed**: All scraping flows through Venue now
-
-The `locations/` app provides deterministic location resolution for queries like "events near Newton":
-- **Location model**: Canonical US cities/towns with lat/lng from Census Gazetteer
-- **Resolution service**: `resolve_location("Newton, MA")` → coordinates + confidence
-- **Geo-filtering**: Bounding box + Haversine distance filtering
-- **RAG integration**: Automatic location resolution before semantic search
-
-See `VENUE_IMPLEMENTATION_HANDOFF.md` for the Venue model and venue normalization system.
+**Location Resolution** (`locations/` app):
+- `Location` model - Canonical US cities/towns with lat/lng from Census Gazetteer
+- `resolve_location("Newton, MA")` → coordinates + confidence
+- Bounding box + Haversine distance filtering (10-mile default radius)
 
 ## Multi-Repository Architecture
 
@@ -79,6 +71,8 @@ This is the **main backend repository** in a 5-repo system:
 
 ## Development Guidelines
 
+See `SHARED_GUIDELINES.md` for common guidelines (code style, commits, security, AI assistant rules).
+
 ### Test-Driven Development (TDD)
 **IMPORTANT: Always start with tests when adding new features:**
 1. Write failing tests first
@@ -88,39 +82,8 @@ This is the **main backend repository** in a 5-repo system:
    - `--buffer` flag suppresses stdout/stderr for clean output
    - Use `LOG_LEVEL=INFO` to see logs during debugging
 
-### Function Design Principles
-Write functions using easily testable subfunctions:
-- Break complex logic into small, pure functions (single responsibility)
-- Minimize dependencies and side effects
-- Use dependency injection for external services (LLM, RAG, Collector API)
-- Keep returns human-readable for easier debugging
-- Avoid complicated logic in return statements
-- Don't write comments that just repeat the function name
-
-**Example:**
-```python
-# Good: Testable subfunctions
-def parse_event_date(date_string: str) -> datetime:
-    """Pure function, easy to test"""
-    return datetime.fromisoformat(date_string)
-
-def validate_event_data(event_data: dict) -> bool:
-    """Pure validation logic"""
-    required_fields = ['title', 'date', 'location']
-    return all(key in event_data for key in required_fields)
-
-def create_event(event_data: dict, api_client: ApiClient) -> Event:
-    """Main function using testable subfunctions"""
-    if not validate_event_data(event_data):
-        raise ValueError("Invalid event data")
-
-    parsed_date = parse_event_date(event_data['date'])
-    return api_client.post_event({**event_data, 'date': parsed_date})
-```
-
 ### Code Style & Naming
 - Python 3.11+, PEP 8, 4-space indentation
-- **Line length: 120 characters maximum** (prefer minimal line wrapping)
 - Type hints and docstrings for all public functions
 - Django apps: lowercase (`events`, `api`), models: `CamelCase`, functions/variables: `snake_case`
 - Keep views thin; place LLM/RAG logic in `api/` services
@@ -160,17 +123,6 @@ This applies to ALL Django ORM operations in FastAPI code, including:
 - Model.objects.filter().update()
 - QuerySet operations
 - Any code that touches the database
-
-### Commit Conventions
-Use Conventional Commits format:
-- `feat:` New features
-- `fix:` Bug fixes
-- `refactor:` Code restructuring
-- `test:` Test additions/modifications
-- `chore:` Build/tooling changes
-- `docs:` Documentation updates
-
-Keep subject lines ≤72 characters. Include rationale in commit body when useful.
 
 ## Project Structure
 
@@ -472,16 +424,11 @@ PASSWORD_RESET_TIMEOUT=3600          # 1 hour
 
 ## Important Reminders
 
-### For AI Assistants
-- **NEVER create files unless absolutely necessary** - Always prefer editing existing files
-- **NEVER proactively create documentation files** (*.md, README) unless explicitly requested
+See `SHARED_GUIDELINES.md` for common guidelines (code style, commits, security, AI assistant rules).
+
+**Backend-specific:**
 - **When adding Python dependencies**: Update BOTH `requirements.txt` (local dev) AND `requirements-prod.txt` (Docker/production)
 - Follow TDD: Write tests first, then implement
-- Keep functions small and testable with dependency injection
-- Use type hints and clear docstrings
-- Reference file locations with `file_path:line_number` format
-- **Line length: 120 characters maximum** - Minimize line wrapping for better readability
-- Avoid emojis unless explicitly requested by user
 
 ## Production Troubleshooting
 
