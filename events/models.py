@@ -131,6 +131,19 @@ class ScrapeHistory(models.Model):
     last_error_at = models.DateTimeField(null=True, blank=True)
     error_category = models.CharField(max_length=50, blank=True)  # timeout, 404, 403, parse_error, etc.
 
+    # Scraper optimization - track which scraper works for this URL
+    last_successful_scraper = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Last extraction method that worked (e.g., 'jsonld', 'localist', 'llm')"
+    )
+    last_scraper_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the last_successful_scraper was last updated"
+    )
+
     # For web scrape writing agent
     agent_notes = models.TextField(blank=True)
 
@@ -149,8 +162,23 @@ class ScrapeHistory(models.Model):
     def __str__(self):
         return f"{self.venue.name}: {self.url} ({self.health_status})"
 
-    def record_attempt(self, success: bool, events_found: int = 0, error_message: str = '', error_category: str = ''):
-        """Record the result of a scraping attempt and update health status."""
+    def record_attempt(
+        self,
+        success: bool,
+        events_found: int = 0,
+        error_message: str = '',
+        error_category: str = '',
+        extraction_method: str = ''
+    ):
+        """Record the result of a scraping attempt and update health status.
+
+        Args:
+            success: Whether the scrape was successful
+            events_found: Number of events extracted
+            error_message: Error message if failed
+            error_category: Categorized error type
+            extraction_method: Scraper method used (e.g., 'jsonld', 'localist', 'llm')
+        """
         from django.utils import timezone
 
         now = timezone.now()
@@ -169,6 +197,10 @@ class ScrapeHistory(models.Model):
             self.last_error = ''
             self.last_error_at = None
             self.error_category = ''
+            # Track successful scraper for optimization
+            if extraction_method:
+                self.last_successful_scraper = extraction_method
+                self.last_scraper_updated_at = now
         else:
             self.consecutive_failures += 1
             self.last_error = error_message[:1000] if error_message else ''

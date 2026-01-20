@@ -50,14 +50,24 @@ def generate_embedding(self, event_id: int):
 @shared_task(bind=True, max_retries=3, default_retry_delay=300)
 def process_scraping_job(self, job_id: int):
     """
-    Process a single scraping job via collector API.
+    DEPRECATED: This task is no longer the primary code path.
 
-    Replaces the polling-based queue endpoint pattern.
-    Updates ScrapeHistory with the result.
+    The collector now polls GET /api/v1/queue/next and reports results via
+    POST /api/v1/scrape/{job_id}/results. Those endpoints handle ScrapeHistory
+    updates and extraction_method tracking.
+
+    This task remains for backwards compatibility but should not be used
+    for new scraping workflows.
 
     Args:
         job_id: ID of the ScrapingJob to process
     """
+    import warnings
+    warnings.warn(
+        "process_scraping_job is deprecated. Use collector polling via /queue/next instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     from events.models import ScrapingJob, ScrapeHistory, Event
     from django.conf import settings
     from urllib.parse import urlparse
@@ -87,16 +97,27 @@ def process_scraping_job(self, job_id: int):
 
     collector_url = getattr(settings, 'COLLECTOR_URL', 'http://localhost:8001')
 
+    # Build extraction hints with preferred_scraper if we know what worked before
+    extraction_hints = {}
+    if job.scrape_history and job.scrape_history.last_successful_scraper:
+        extraction_hints['preferred_scraper'] = job.scrape_history.last_successful_scraper
+        logger.info(f"Job {job_id}: hinting preferred_scraper={extraction_hints['preferred_scraper']}")
+
     try:
         response = requests.post(
             f"{collector_url}/extract",
-            json={"url": job.url, "extraction_hints": {}},
+            json={"url": job.url, "extraction_hints": extraction_hints},
             timeout=180
         )
 
         if response.status_code == 200:
             data = response.json()
             events_created = 0
+
+            # Extract metadata from collector response
+            metadata = data.get('metadata', {})
+            extraction_method = metadata.get('extraction_method') or ''
+            confidence_score = metadata.get('confidence_score')
 
             if data.get('success') and data.get('events'):
                 for event_data in data['events']:
@@ -113,13 +134,23 @@ def process_scraping_job(self, job_id: int):
             job.status = 'completed'
             job.events_found = events_created
             job.completed_at = timezone.now()
+            # Store extraction metadata on the job
+            if extraction_method:
+                job.extraction_method = extraction_method
+            if confidence_score is not None:
+                job.confidence_score = confidence_score
             job.save()
 
-            # Update ScrapeHistory with success
+            # Update ScrapeHistory with success and extraction method
             if job.scrape_history:
-                job.scrape_history.record_attempt(success=True, events_found=events_created)
+                job.scrape_history.record_attempt(
+                    success=True,
+                    events_found=events_created,
+                    extraction_method=extraction_method
+                )
 
-            return {'job_id': job_id, 'status': 'completed', 'events': events_created}
+            logger.info(f"Job {job_id} completed: {events_created} events, method={extraction_method}")
+            return {'job_id': job_id, 'status': 'completed', 'events': events_created, 'extraction_method': extraction_method}
         else:
             error_msg = f"Collector API error: {response.status_code}"
             error_cat = categorize_error(error_msg, response.status_code)

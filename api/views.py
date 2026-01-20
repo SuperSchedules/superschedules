@@ -24,6 +24,7 @@ from events.models import (
     Event,
     SiteStrategy,
     ScrapingJob,
+    ScrapeHistory,
     ChatSession,
     ChatMessage,
 )
@@ -262,6 +263,9 @@ class ScrapeResultSchema(Schema):
     processing_time: float | None = None
     error_message: str | None = None
     success: bool = True
+    # Scraper optimization fields
+    extraction_method: str | None = None  # e.g., 'jsonld', 'localist', 'llm'
+    confidence_score: float | None = None  # 0.0-1.0 for LLM extractions
 
 
 class ScrapingJobSchema(ModelSchema):
@@ -291,6 +295,18 @@ class ScrapingJobSchema(ModelSchema):
             "created_at",
             "completed_at",
         ]
+
+
+class ScrapingJobWithHintsSchema(Schema):
+    """Extended job schema that includes scraper hints for optimization."""
+    id: int
+    url: str
+    domain: str
+    status: str
+    priority: int
+    venue_id: int | None = None
+    # Scraper optimization hint
+    preferred_scraper: str | None = None
 
 
 class BatchRequestSchema(Schema):
@@ -676,11 +692,32 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
     job.processing_time = payload.processing_time
     job.error_message = payload.error_message or ""
     job.completed_at = timezone.now()
+    # Store extraction metadata
+    extraction_method = payload.extraction_method or ''
+    if extraction_method:
+        job.extraction_method = extraction_method
+    if payload.confidence_score is not None:
+        job.confidence_score = payload.confidence_score
     job.save()
+
+    # Update ScrapeHistory with result
+    if job.scrape_history:
+        if payload.success:
+            job.scrape_history.record_attempt(
+                success=True,
+                events_found=payload.events_found,
+                extraction_method=extraction_method
+            )
+        else:
+            job.scrape_history.record_attempt(
+                success=False,
+                error_message=payload.error_message or '',
+            )
 
     if skipped_count > 0:
         logger.warning(f"Job {job_id}: skipped {skipped_count} events without venue data")
 
+    logger.info(f"Job {job_id} completed: {len(created_ids)} created, {len(updated_ids)} updated, method={extraction_method}")
     return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
 
 
@@ -690,13 +727,18 @@ def save_scrape_results(request, job_id: int, payload: ScrapeResultSchema):
 # NOTE: Frontend queue endpoints (POST /queue/submit, POST /queue/bulk-submit)
 # have been removed. Use admin actions or periodic tasks for job creation.
 
-@router.get("/queue/next", auth=ServiceTokenAuth(), response=ScrapingJobSchema)
+@router.get("/queue/next", auth=ServiceTokenAuth(), response=ScrapingJobWithHintsSchema)
 def get_next_job(request, worker_id: str = Query(...)):
-    """Workers call this to get next job (atomic claim with SELECT FOR UPDATE)."""
+    """Workers call this to get next job (atomic claim with SELECT FOR UPDATE).
+
+    Returns job with preferred_scraper hint from ScrapeHistory if available.
+    """
     from django.db import transaction
 
     with transaction.atomic():
-        job = ScrapingJob.objects.select_for_update(skip_locked=True).filter(
+        job = ScrapingJob.objects.select_for_update(skip_locked=True).select_related(
+            'scrape_history'
+        ).filter(
             status='pending'
         ).order_by('priority', 'created_at').first()
 
@@ -708,8 +750,21 @@ def get_next_job(request, worker_id: str = Query(...)):
         job.locked_by = worker_id
         job.save()
 
-        logger.info(f"Job {job.id} claimed by worker {worker_id}")
-        return job
+        # Get preferred_scraper hint from ScrapeHistory if available
+        preferred_scraper = None
+        if job.scrape_history and job.scrape_history.last_successful_scraper:
+            preferred_scraper = job.scrape_history.last_successful_scraper
+
+        logger.info(f"Job {job.id} claimed by worker {worker_id}, preferred_scraper={preferred_scraper}")
+        return {
+            "id": job.id,
+            "url": job.url,
+            "domain": job.domain,
+            "status": job.status,
+            "priority": job.priority,
+            "venue_id": job.venue_id,
+            "preferred_scraper": preferred_scraper,
+        }
 
 
 @router.post("/queue/{job_id}/complete", auth=ServiceTokenAuth())
@@ -754,12 +809,32 @@ def complete_job(request, job_id: int, payload: ScrapeResultSchema):
     job.processing_time = payload.processing_time
     job.error_message = payload.error_message or ''
     job.completed_at = timezone.now()
+    # Store extraction metadata
+    extraction_method = payload.extraction_method or ''
+    if extraction_method:
+        job.extraction_method = extraction_method
+    if payload.confidence_score is not None:
+        job.confidence_score = payload.confidence_score
     job.save()
+
+    # Update ScrapeHistory with result
+    if job.scrape_history:
+        if payload.success:
+            job.scrape_history.record_attempt(
+                success=True,
+                events_found=len(created_ids) + len(updated_ids),
+                extraction_method=extraction_method
+            )
+        else:
+            job.scrape_history.record_attempt(
+                success=False,
+                error_message=payload.error_message or '',
+            )
 
     if skipped_count > 0:
         logger.warning(f"Job {job_id}: skipped {skipped_count} events without venue data")
 
-    logger.info(f"Job {job_id} completed: {len(created_ids)} created, {len(updated_ids)} updated")
+    logger.info(f"Job {job_id} completed: {len(created_ids)} created, {len(updated_ids)} updated, method={extraction_method}")
     return {"created_event_ids": created_ids, "updated_event_ids": updated_ids}
 
 
@@ -786,6 +861,69 @@ def queue_status(request):
         "processing": stats['processing'],
         "completed_24h": stats['completed_today'],
         "failed_24h": stats['failed_today']
+    }
+
+
+@router.get("/stats/scrapers", auth=JWTAuth())
+def scraper_stats(request):
+    """
+    Get statistics on scraper usage and effectiveness.
+
+    Returns counts of URLs per extraction method and related metrics.
+    Useful for monitoring agent-created scraper adoption and performance.
+    """
+    from django.db.models import Count, Avg
+
+    # Count completed jobs by extraction_method in last 30 days
+    thirty_days_ago = timezone.now() - timedelta(days=30)
+
+    # Jobs by extraction method (recent)
+    jobs_by_method = ScrapingJob.objects.filter(
+        status='completed',
+        completed_at__gte=thirty_days_ago,
+        extraction_method__isnull=False
+    ).exclude(extraction_method='').values('extraction_method').annotate(
+        count=Count('id'),
+        avg_events=Avg('events_found'),
+        avg_confidence=Avg('confidence_score')
+    ).order_by('-count')
+
+    # ScrapeHistories with known scrapers (for preferred_scraper hints)
+    urls_with_known_scraper = ScrapeHistory.objects.exclude(
+        last_successful_scraper=''
+    ).values('last_successful_scraper').annotate(
+        url_count=Count('id')
+    ).order_by('-url_count')
+
+    # Summary stats
+    total_urls_tracked = ScrapeHistory.objects.count()
+    urls_with_scraper_hint = ScrapeHistory.objects.exclude(last_successful_scraper='').count()
+
+    return {
+        "jobs_by_method": [
+            {
+                "extraction_method": item['extraction_method'],
+                "job_count": item['count'],
+                "avg_events_per_job": round(item['avg_events'] or 0, 2),
+                "avg_confidence": round(item['avg_confidence'] or 0, 2) if item['avg_confidence'] else None
+            }
+            for item in jobs_by_method
+        ],
+        "urls_by_known_scraper": [
+            {
+                "scraper": item['last_successful_scraper'],
+                "url_count": item['url_count']
+            }
+            for item in urls_with_known_scraper
+        ],
+        "summary": {
+            "total_urls_tracked": total_urls_tracked,
+            "urls_with_scraper_hint": urls_with_scraper_hint,
+            "hint_coverage_percent": round(
+                (urls_with_scraper_hint / total_urls_tracked * 100) if total_urls_tracked > 0 else 0, 1
+            ),
+            "period_days": 30
+        }
     }
 
 
@@ -1416,8 +1554,6 @@ def get_problematic_urls(
 
     Used by the web scrape writing agent to identify URLs that need manual fixes.
     """
-    from events.models import ScrapeHistory
-
     qs = ScrapeHistory.objects.filter(health_status__in=('needs_attention', 'unscrapable'))
 
     if error_category:
@@ -1457,8 +1593,6 @@ def update_scrape_history_notes(request, history_id: int, payload: UpdateAgentNo
 
     Used by the web scrape writing agent to record diagnosis and notes.
     """
-    from events.models import ScrapeHistory
-
     history = get_object_or_404(ScrapeHistory, id=history_id)
     history.agent_notes = payload.agent_notes
     history.save(update_fields=['agent_notes', 'updated_at'])
