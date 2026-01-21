@@ -736,7 +736,9 @@ def get_next_job(request, worker_id: str = Query(...)):
     from django.db import transaction
 
     with transaction.atomic():
-        job = ScrapingJob.objects.select_for_update(skip_locked=True).select_related(
+        job = ScrapingJob.objects.select_for_update(
+            skip_locked=True, of=('self',)
+        ).select_related(
             'scrape_history'
         ).filter(
             status='pending'
